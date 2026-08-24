@@ -9,6 +9,7 @@
 - 起点：`windingwind/zotero-plugin-template` 3.1.0；本地曾为浅克隆，2026-08-24 已 `git fetch --unshallow template` 补全历史
 - 远程：`origin`（自有仓库）+ `template`（上游模板）
 - 首次提交：`73c7a39` 重构 Zotero 研究数据库插件：落地分层架构与核心模块（91 文件，+28035/−1631）；`main` 基线分支也已推送（`306d4e2`）
+- 里程碑标签：`v0.3.32`（annotated，2026-08-24 创建并推送，对齐 package.json 当前版本；仓库既有 `v*` 标签均为上游模板历史）
 
 # 已完成
 
