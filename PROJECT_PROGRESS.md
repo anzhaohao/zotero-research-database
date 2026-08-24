@@ -4,10 +4,11 @@
 
 # Git 状态
 
-- 当前分支：`feat/zotero-research-database`
-- 起点：`windingwind/zotero-plugin-template` 3.1.0 的浅克隆基线
-- 模板远程：`template`
-- 当前没有项目自有远程仓库，也没有提交本轮修改。
+- 当前分支：`feat/zotero-research-database`（GitHub 默认分支，跟踪 `origin/feat/zotero-research-database`）
+- 项目自有公开仓库：`https://github.com/anzhaohao/zotero-research-database`（2026-08-24 创建，PUBLIC）
+- 起点：`windingwind/zotero-plugin-template` 3.1.0；本地曾为浅克隆，2026-08-24 已 `git fetch --unshallow template` 补全历史
+- 远程：`origin`（自有仓库）+ `template`（上游模板）
+- 首次提交：`73c7a39` 重构 Zotero 研究数据库插件：落地分层架构与核心模块（91 文件，+28035/−1631）；`main` 基线分支也已推送（`306d4e2`）
 
 # 已完成
 
@@ -524,3 +525,19 @@
 - “管理自定义字段”和“显示 / 隐藏列”已合成“字段与列管理”。其“列布局”页支持显示/隐藏、表头别名、固定和六点拖拽；“自定义字段”页保留字段新增、编辑、归档、恢复与 Agent 提示词。一次保存会原子写入当前视图布局和本机字段方案，不修改 Zotero 书目元数据或正式数据库。
 - 验证：Node 单元测试 `86` 项通过；首次 Zotero 9.0.6 隔离完整套件 `97` 项通过（HanaAgent 与 Translate for Zotero 的环境依赖项按条件 pending）。新增管理窗拖拽/保存后，真实宿主用例已经通过拖拽与保存步骤；后续断言按新的共享顺序修正。`startup` 用例现额外断言：指针停在右侧 gutter 后 `scrollLeft` 经两个等待窗口持续增长，释放后数值保持不变。重新完整运行时，测试框架在干净 `.scaffold/test/profile` 的启动标记阶段无输出；该隔离 Profile 已可恢复地移动到 `E:\software\AI改前备份\20260816_225600_ZRDB隔离测试Profile卡住前备份_codex\profile`，测试实例也已结束。没有终止任何正式 Zotero 主进程或访问正式 Profile。Prettier/ESLint、TypeScript、`git diff --check` 和生产构建通过。完整外部 Claude Code 执行器因本机 `--json-schema` 参数兼容错误未启动写入，随后 Codex CLI 初始化停滞且在无文件写入时被结束；实际修复由当前会话完成并独立验收。
 - `0.3.30` 生产 XPI：`.scaffold/build/zotero-research-database.xpi`，大小 `415,369` 字节，SHA-256 `DE98FCCCFB9AB38063F9780D8D02E3A240709565B3BCB4C201863F7C725A5C8F`。正式 Zotero Profile、正式文献库及 `zotero.sqlite` 未访问；没有执行 `git add`、提交、推送、回滚或清理无关文件。
+
+# 2026-08-24 首次 Git 提交与公开推送
+
+- 用户授权下完成项目首次 Git 提交与推送，并新建公开 GitHub 仓库：`anzhaohao/zotero-research-database`（https://github.com/anzhaohao/zotero-research-database ，visibility=PUBLIC，默认分支 `feat/zotero-research-database`）。
+- 提交 `73c7a39`「重构 Zotero 研究数据库插件：落地分层架构与核心模块」：91 文件、+28035/−1631，包含 src/core、src/domain、src/services、src/storage、src/ui 全部分层模块、PROJECT_PROGRESS.md、design-prototypes 设计原型与 test/unit 单元测试；删除模板示例 src/modules/examples.ts 与 preferenceScript.ts。
+- 推送排障：首次 `gh repo create --push` 反复报 `remote: fatal: did not receive expected object da97aef...`（index-pack failed）。根因是本地为浅克隆：`.git/shallow` 边界提交 `306d4e2`（dependabot 依赖更新）的父提交 `da97aef` 不在本地对象库，服务端解包时找不到该对象。`git fetch --unshallow template` 补全历史、移除 shallow 标记后推送即成功（HTTP/1.1、postBuffer、useThinPack 等尝试均非根因，已回滚为默认即可）。
+- 远端现状：`origin/feat/zotero-research-database` = `73c7a39`（HEAD），`origin/main` = `306d4e2`（模板基线）；两分支均已推送。提交前已 grep 扫描，无密钥/令牌；新增内容 69 文件约 1.5 MB（最大对象 308 KB），无大文件问题。
+
+```mermaid
+gitGraph
+   commit id: "da97aef 上游历史（补全）"
+   commit id: "306d4e2 模板基线=main"
+   branch "feat/zotero-research-database"
+   checkout "feat/zotero-research-database"
+   commit id: "73c7a39 重构分层架构（当前HEAD）"
+```
