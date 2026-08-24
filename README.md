@@ -4,6 +4,15 @@ Zotero Research Database 为 Zotero 9 增加同一文献管理区域内的数据
 
 表格是 Zotero 条目的动态投影：原生书目字段直接来自条目元数据，自定义研究属性、锁定状态和内部 manifest 保存在 Zotero 配置目录下的插件本机数据文件中。研究属性同时通过 Zotero 9 的 `ItemPaneManager.registerInfoRow()` 注册到原生“信息”面板；插件不使用 Markdown 充当数据库、不建立第二套书目库，也不直接修改 `zotero.sqlite`。
 
+# 页面展示
+
+
+https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
+
+
+
+
+
 # 当前能力
 
 - Zotero 原生文献工具栏左侧约 `270px` 处只有一个常驻 SVG 切换按钮：默认列表中显示表格图标，数据库表格中显示列表图标；按钮使用固定尺寸与固定锚点，切换时不漂移，也不增加卡片入口。切回默认列表时完整恢复 Zotero 原生界面。
