@@ -23,4 +23,7 @@ export type FluentMessageId =
   | 'startup-begin'
   | 'startup-finish'
   | 'tabpanel-lib-tab-label'
-  | 'tabpanel-reader-tab-label';
+  | 'tabpanel-reader-tab-label'
+  | 'zrdb-item-info-row-label'
+  | 'zrdb-item-properties-header'
+  | 'zrdb-item-properties-sidenav';

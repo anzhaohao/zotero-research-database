@@ -1,46 +1,59 @@
 {
-  "name": "zotero-plugin-template",
+  "name": "zotero-research-database",
   "type": "module",
-  "version": "3.1.0",
-  "description": "Zotero Plugin Template",
+  "version": "0.3.32",
+  "description": "Notion-like research database views with an external Codex bridge for Zotero 9",
+  "private": true,
   "config": {
-    "addonName": "Zotero Plugin Template",
-    "addonID": "addontemplate@euclpts.com",
-    "addonRef": "addontemplate",
-    "addonInstance": "AddonTemplate",
-    "prefsPrefix": "extensions.zotero.addontemplate"
+    "addonName": "Zotero Research Database",
+    "addonID": "zotero-research-database@anzhaofeng.local",
+    "addonRef": "zoteroResearchDatabase",
+    "addonInstance": "ZoteroResearchDatabase",
+    "prefsPrefix": "extensions.zotero.zoteroResearchDatabase"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/windingwind/zotero-plugin-template.git"
+    "url": "git+https://github.com/anzhaohao/zotero-research-database.git"
   },
-  "author": "windingwind",
+  "author": "An Zhaofeng",
   "bugs": {
-    "url": "https://github.com/windingwind/zotero-plugin-template/issues"
+    "url": "https://github.com/anzhaohao/zotero-research-database/issues"
   },
-  "homepage": "https://github.com/windingwind/zotero-plugin-template#readme",
+  "homepage": "https://github.com/anzhaohao/zotero-research-database",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
+    "test:unit": "tsx node_modules/mocha/bin/mocha.js \"test/unit/**/*.test.ts\"",
     "release": "zotero-plugin release",
     "test": "zotero-plugin test",
     "update-deps": "npm update --save"
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.13.12",
+    "gsap": "^3.15.0",
+    "jszip": "^3.10.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.0.0",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },
   "devDependencies": {
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@zotero-plugin/eslint-config": "^0.6.7",
     "chai": "^6.2.1",
     "eslint": "^9.39.2",
     "mocha": "^11.7.5",
     "prettier": "^3.7.4",
+    "tsx": "^4.20.0",
     "typescript": "^5.9.3",
     "zotero-plugin-scaffold": "^0.8.2",
     "zotero-types": "^4.1.0-beta.4"

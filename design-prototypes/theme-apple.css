@@ -1,0 +1,191 @@
+body {
+  --app-bg: #eef3f8;
+  --app-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.52),
+    transparent 260px
+  );
+  --ambient-opacity: 0.78;
+  --ambient-a: rgba(158, 204, 255, 0.48);
+  --ambient-b: rgba(199, 183, 255, 0.36);
+  --ambient-c: rgba(141, 225, 213, 0.27);
+  --text: #142132;
+  --text-soft: #2a3748;
+  --title-ink: #102235;
+  --muted: #6f7d8e;
+  --muted-soft: #a9b3c0;
+  --accent-ink: #1769be;
+  --success: #2d9871;
+  --line: rgba(37, 67, 98, 0.095);
+  --mark-bg: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.9),
+    rgba(214, 234, 252, 0.72)
+  );
+  --mark-border: rgba(255, 255, 255, 0.78);
+  --mark-shadow:
+    0 8px 24px rgba(49, 96, 143, 0.16), inset 0 1px rgba(255, 255, 255, 0.78);
+  --mark-radius: 11px;
+  --control-bg: rgba(255, 255, 255, 0.58);
+  --control-focus: rgba(255, 255, 255, 0.83);
+  --control-soft: rgba(255, 255, 255, 0.34);
+  --control-border: rgba(255, 255, 255, 0.74);
+  --control-radius: 11px;
+  --control-shadow:
+    0 6px 20px rgba(41, 80, 119, 0.07), inset 0 1px rgba(255, 255, 255, 0.72);
+  --active-control: rgba(255, 255, 255, 0.84);
+  --active-shadow:
+    0 5px 14px rgba(42, 87, 130, 0.13), inset 0 1px rgba(255, 255, 255, 0.9);
+  --focus-border: rgba(33, 119, 207, 0.58);
+  --focus-shadow:
+    0 0 0 4px rgba(37, 128, 218, 0.12), 0 8px 24px rgba(42, 87, 130, 0.1);
+  --chip-border: rgba(255, 255, 255, 0.64);
+  --chip-bg: rgba(255, 255, 255, 0.38);
+  --menu-bg: rgba(245, 249, 253, 0.78);
+  --menu-border: rgba(255, 255, 255, 0.82);
+  --menu-radius: 15px;
+  --menu-shadow:
+    0 22px 58px rgba(42, 73, 108, 0.22), inset 0 1px rgba(255, 255, 255, 0.85);
+  --menu-filter: blur(26px) saturate(170%);
+  --menu-hover: rgba(255, 255, 255, 0.7);
+  --panel-bg: rgba(251, 253, 255, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.82);
+  --panel-radius: 17px;
+  --panel-shadow:
+    0 22px 70px rgba(49, 80, 112, 0.15), inset 0 1px rgba(255, 255, 255, 0.85);
+  --row-bg: rgba(255, 255, 255, 0.62);
+  --row-hover: rgba(255, 255, 255, 0.82);
+  --header-bg: rgba(242, 248, 253, 0.76);
+  --header-text: #637488;
+  --header-shadow:
+    0 10px 30px -24px rgba(29, 63, 99, 0.65),
+    inset 0 -1px rgba(36, 73, 110, 0.08);
+  --header-filter: blur(22px) saturate(165%);
+  --scroll-thumb: rgba(70, 99, 128, 0.26);
+  --column-selected: rgba(36, 129, 220, 0.048);
+  --column-header-selected: rgba(41, 134, 225, 0.11);
+  --column-accent: rgba(43, 132, 218, 0.21);
+  --cell-active: rgba(230, 243, 255, 0.92);
+  --cell-colored: rgba(255, 241, 190, 0.74);
+  --pinned-bg: rgba(249, 252, 255, 0.94);
+  --pinned-header-bg: rgba(239, 247, 253, 0.96);
+  --pinned-shadow:
+    18px 0 28px -22px rgba(31, 68, 106, 0.68), 1px 0 rgba(255, 255, 255, 0.88);
+  --paper-bg: linear-gradient(150deg, #ffffff, #eaf2fa);
+  --paper-border: rgba(93, 126, 157, 0.16);
+  --paper-ink: #dc5757;
+  --paper-shadow: 0 7px 18px rgba(35, 77, 119, 0.11), inset 0 1px #fff;
+  --tag-bg: rgba(154, 117, 211, 0.11);
+  --tag-border: rgba(138, 96, 199, 0.2);
+  --tag-text: #7652a6;
+  --tag-hot-bg: rgba(231, 91, 79, 0.1);
+  --tag-hot-border: rgba(221, 78, 68, 0.19);
+  --tag-hot-text: #ba4c43;
+  --citation-line: rgba(47, 77, 108, 0.11);
+  --citation-text: #8492a1;
+  --action-bg: rgba(247, 251, 255, 0.82);
+  --action-border: rgba(255, 255, 255, 0.86);
+  --action-shadow:
+    0 12px 32px rgba(43, 77, 112, 0.2), inset 0 1px rgba(255, 255, 255, 0.9);
+  --action-filter: blur(18px) saturate(165%);
+  --button-primary-bg: #2381dd;
+  --button-primary-text: #fff;
+}
+
+body.is-dark {
+  --app-bg: #101821;
+  --app-sheen: linear-gradient(
+    180deg,
+    rgba(48, 67, 88, 0.22),
+    transparent 260px
+  );
+  --ambient-opacity: 0.48;
+  --ambient-a: rgba(33, 98, 164, 0.4);
+  --ambient-b: rgba(105, 67, 158, 0.31);
+  --ambient-c: rgba(34, 125, 119, 0.24);
+  --text: #f0f5fa;
+  --text-soft: #dce6ef;
+  --title-ink: #f4f8fc;
+  --muted: #91a0b0;
+  --muted-soft: #596878;
+  --accent-ink: #6eb7ff;
+  --line: rgba(223, 239, 255, 0.075);
+  --mark-bg: linear-gradient(
+    145deg,
+    rgba(64, 90, 116, 0.64),
+    rgba(30, 49, 69, 0.7)
+  );
+  --mark-border: rgba(210, 232, 255, 0.14);
+  --mark-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.25), inset 0 1px rgba(255, 255, 255, 0.13);
+  --control-bg: rgba(35, 51, 68, 0.58);
+  --control-focus: rgba(47, 66, 86, 0.78);
+  --control-soft: rgba(255, 255, 255, 0.055);
+  --control-border: rgba(224, 239, 255, 0.105);
+  --active-control: rgba(55, 74, 94, 0.78);
+  --active-shadow:
+    0 7px 20px rgba(0, 0, 0, 0.24), inset 0 1px rgba(255, 255, 255, 0.1);
+  --focus-border: rgba(91, 176, 255, 0.64);
+  --focus-shadow:
+    0 0 0 4px rgba(73, 162, 247, 0.13), 0 8px 24px rgba(0, 0, 0, 0.2);
+  --chip-border: rgba(226, 240, 255, 0.09);
+  --chip-bg: rgba(255, 255, 255, 0.04);
+  --menu-bg: rgba(28, 41, 55, 0.84);
+  --menu-border: rgba(223, 239, 255, 0.12);
+  --menu-shadow:
+    0 24px 62px rgba(0, 0, 0, 0.45), inset 0 1px rgba(255, 255, 255, 0.09);
+  --menu-hover: rgba(255, 255, 255, 0.075);
+  --panel-bg: rgba(26, 38, 51, 0.76);
+  --panel-border: rgba(223, 239, 255, 0.105);
+  --panel-shadow:
+    0 24px 72px rgba(0, 0, 0, 0.3), inset 0 1px rgba(255, 255, 255, 0.08);
+  --row-bg: rgba(28, 41, 55, 0.63);
+  --row-hover: rgba(40, 56, 73, 0.78);
+  --header-bg: rgba(31, 47, 63, 0.88);
+  --header-text: #a7b6c5;
+  --header-shadow:
+    0 10px 30px -24px rgba(0, 0, 0, 0.9), inset 0 -1px rgba(223, 239, 255, 0.08);
+  --scroll-thumb: rgba(213, 232, 250, 0.22);
+  --column-selected: rgba(77, 169, 255, 0.055);
+  --column-header-selected: rgba(77, 169, 255, 0.12);
+  --column-accent: rgba(93, 180, 255, 0.24);
+  --cell-active: rgba(31, 78, 119, 0.67);
+  --cell-colored: rgba(94, 78, 31, 0.68);
+  --pinned-bg: rgba(29, 43, 57, 0.96);
+  --pinned-header-bg: rgba(32, 49, 66, 0.98);
+  --pinned-shadow:
+    18px 0 28px -22px rgba(0, 0, 0, 0.95), 1px 0 rgba(223, 239, 255, 0.08);
+  --paper-bg: linear-gradient(150deg, #34485c, #243444);
+  --paper-border: rgba(220, 237, 255, 0.11);
+  --paper-ink: #ff8c87;
+  --paper-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.24), inset 0 1px rgba(255, 255, 255, 0.09);
+  --tag-bg: rgba(176, 127, 238, 0.14);
+  --tag-border: rgba(182, 137, 235, 0.23);
+  --tag-text: #d2b3f4;
+  --tag-hot-bg: rgba(242, 104, 92, 0.13);
+  --tag-hot-border: rgba(240, 119, 107, 0.22);
+  --tag-hot-text: #ffaaa3;
+  --citation-line: rgba(223, 239, 255, 0.075);
+  --citation-text: #758494;
+  --action-bg: rgba(38, 55, 73, 0.88);
+  --action-border: rgba(223, 239, 255, 0.12);
+  --action-shadow:
+    0 14px 36px rgba(0, 0, 0, 0.4), inset 0 1px rgba(255, 255, 255, 0.09);
+  --button-primary-bg: #318fe8;
+}
+
+body[data-theme="apple"] .workspace {
+  animation: apple-materialize 520ms var(--ease-out) both;
+}
+
+@keyframes apple-materialize {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

@@ -1,33 +1,318 @@
 <linkset>
-  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+  <html:link
+    rel="stylesheet"
+    href="chrome://__addonRef__/content/zoteroPane.css"
+  />
 </linkset>
 <groupbox
+  id="zrdb-preferences-root"
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
-  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
+  <label><html:h2>Zotero Research Database</html:h2></label>
+  <html:p class="zrdb-pref-intro"
+    >数据库表格是 Zotero
+    原生文献列表的另一种视图。研究属性、视图布局和提示词只保存在
+    当前设备；书目、PDF 与普通附件仍由 Zotero 正常管理与同步。</html:p
+  >
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>通用</html:h3>
     <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
-    <html:input
-      type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
-  </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
-  </hbox>
+      >默认行高
+      <html:input type="number" min="32" max="480" data-pref="defaultRowHeight"
+    /></html:label>
+    <html:label
+      >默认视图
+      <html:select data-pref="defaultView"
+        ><html:option value="table">数据库表格</html:option
+        ><html:option value="default">Zotero 默认列表</html:option></html:select
+      ></html:label
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="motionEnabled" /> 启用
+      Notion/Apple 风格动效</html:label
+    >
+    <html:label
+      >默认导出范围
+      <html:select data-pref="defaultExportScope"
+        ><html:option value="filtered">当前筛选结果</html:option
+        ><html:option value="selected">当前选中文献</html:option
+        ><html:option value="all">当前视图全部</html:option></html:select
+      ></html:label
+    >
+  </html:div>
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>外观</html:h3>
+    <html:label
+      >界面密度
+      <html:select data-pref="density"
+        ><html:option value="compact">紧凑</html:option
+        ><html:option value="comfortable">舒适</html:option></html:select
+      ></html:label
+    >
+    <html:label
+      >圆角
+      <html:select data-pref="cornerStrength"
+        ><html:option value="none">无</html:option
+        ><html:option value="medium">适中</html:option
+        ><html:option value="large">较大</html:option></html:select
+      ></html:label
+    >
+    <html:label
+      >阴影
+      <html:select data-pref="shadowStrength"
+        ><html:option value="none">无</html:option
+        ><html:option value="subtle">轻微</html:option
+        ><html:option value="strong">明显</html:option></html:select
+      ></html:label
+    >
+    <html:p>界面明暗自动跟随 Zotero，不提供单独覆盖开关。</html:p>
+  </html:div>
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>列属性与字段</html:h3>
+    <html:p
+      >下面的自定义字段、说明和提示词保存在本机研究数据库中。原生元数据列只读；归档字段保留历史值，可以恢复。</html:p
+    >
+    <html:div id="zrdb-native-columns" class="zrdb-pref-columns"></html:div>
+    <html:div id="zrdb-fields-list" class="zrdb-pref-fields"></html:div>
+    <html:div class="zrdb-pref-inline-actions">
+      <html:button type="button" id="zrdb-add-field"
+        >添加自定义字段</html:button
+      >
+      <html:button type="button" id="zrdb-save-fields"
+        >保存字段方案</html:button
+      >
+    </html:div>
+    <html:button type="button" id="zrdb-reset-layout"
+      >恢复默认表格布局</html:button
+    >
+  </html:div>
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>图表与公式</html:h3>
+    <html:p
+      >默认读取已安装的 Zotero Figure 本地识别结果；结果只保存在本机缓存，不写入
+      Zotero 附件、Extra、标签或同步数据。没有识别结果时可回退到
+      MinerU。</html:p
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="zoteroFigureEnabled" /> 使用
+      Zotero Figure（默认）</html:label
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="zoteroFigureShowFigures" />
+      显示图</html:label
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="zoteroFigureShowTables" />
+      显示表</html:label
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="zoteroFigureShowFormulas" />
+      显示公式</html:label
+    >
+    <html:label
+      ><html:input type="checkbox" data-pref="mineruFigureFallback" /> Zotero
+      Figure 没有结果时回退 MinerU</html:label
+    >
+    <html:label
+      >图片质量
+      <html:select data-pref="figureImageQuality"
+        ><html:option value="standard">标准</html:option
+        ><html:option value="high">高清（PDF 重渲染）</html:option></html:select
+      ></html:label
+    >
+    <html:p
+      >单击图表使用系统默认图片应用打开；双击图表定位到 Zotero PDF。PDF
+      重渲染只生成 本机缓存，不覆盖已有 MinerU 附件。</html:p
+    >
+  </html:div>
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>外部 Agent</html:h3>
+    <html:label
+      >适配器
+      <html:select data-pref="agentKind"
+        ><html:option value="codex-cli">Codex CLI</html:option
+        ><html:option value="claude-code">Claude Code（本机预设）</html:option
+        ><html:option value="hana-agent">HanaAgent（本机预设）</html:option
+        ><html:option value="ollama">Ollama（本机）</html:option
+        ><html:option value="custom-json-process"
+          >自定义 JSON 进程</html:option
+        ></html:select
+      ></html:label
+    >
+    <html:label data-agent-kinds="claude-code hana-agent custom-json-process"
+      >可执行文件
+      <html:input
+        type="text"
+        data-pref="agentExecutable"
+        placeholder="codex 或绝对路径"
+    /></html:label>
+    <html:label data-agent-kinds="custom-json-process"
+      >参数（JSON 数组）
+      <html:input type="text" data-pref="agentArgs" placeholder="[]"
+    /></html:label>
+    <html:label data-agent-kinds="ollama hana-agent"
+      ><html:span data-agent-endpoint-label="true">本机端点</html:span>
+      <html:input type="text" data-pref="agentEndpoint"
+    /></html:label>
+    <html:label data-agent-kinds="codex-cli claude-code ollama"
+      >模型名 <html:input type="text" data-pref="agentModel"
+    /></html:label>
+    <html:label
+      >超时（毫秒）
+      <html:input type="number" min="1000" data-pref="agentTimeoutMs"
+    /></html:label>
+    <html:p class="zrdb-pref-warning"
+      >插件不会保存云端 API Key，也不会经过 Shell 拼接命令。连接测试和结构化
+      JSON 校验由外部适配器完成。</html:p
+    >
+    <html:div class="zrdb-pref-inline-actions">
+      <html:button type="button" id="zrdb-agent-test">连接测试</html:button>
+      <html:button type="button" id="zrdb-agent-json-test"
+        >结构化 JSON 测试</html:button
+      >
+    </html:div>
+  </html:div>
+
+  <html:div class="zrdb-pref-section">
+    <html:h3>MinerU</html:h3>
+    <html:div id="zrdb-mineru-artifact-visibility" class="zrdb-pref-callout"
+      ><html:h4>原生列表显示</html:h4
+      ><html:label
+        ><html:input
+          type="checkbox"
+          data-pref="hideMinerUArtifactsInNativeList"
+        />
+        在 Zotero 默认列表中隐藏插件管理的 MinerU Markdown、图和表</html:label
+      ><html:p
+        >默认隐藏。取消勾选即可在原生条目下再次显示这些附件；不会删除附件、图片、PDF
+        或任何 Zotero 数据。</html:p
+      ></html:div
+    >
+    <html:label
+      >运行方式
+      <html:select data-pref="mineruMode"
+        ><html:option value="local-client">MinerU Desktop（本机）</html:option
+        ><html:option value="official-api">MinerU 网页 API</html:option
+        ><html:option value="self-hosted"
+          >Docker / 本地 API</html:option
+        ></html:select
+      ></html:label
+    >
+    <html:p class="zrdb-pref-mode-note" data-mineru-modes="local-client"
+      >插件会投递主 PDF，并监听 Desktop 结果目录；解析完成后自动导入 Markdown
+      与图表。</html:p
+    >
+    <html:p class="zrdb-pref-mode-note" data-mineru-modes="self-hosted"
+      >推荐：转换完成后自动导入 Markdown，并把 content_list.json
+      中的图、表和图片放入“论文图表”列。</html:p
+    >
+    <html:label data-mineru-modes="local-client"
+      >客户端可执行文件
+      <html:input
+        type="text"
+        data-pref="mineruExecutable"
+        placeholder="E:\software\MinerU\MinerU.exe"
+    /></html:label>
+    <html:label data-mineru-modes="local-client"
+      >客户端附加参数（JSON 数组）
+      <html:input type="text" data-pref="mineruArgs" placeholder="[]"
+    /></html:label>
+    <html:label data-mineru-modes="local-client"
+      >Desktop 结果目录（留空自动读取）
+      <html:input
+        type="text"
+        data-pref="mineruDesktopOutputDirectory"
+        placeholder="%USERPROFILE%\MinerU"
+    /></html:label>
+    <html:label data-mineru-modes="official-api"
+      >网页 API 地址
+      <html:input
+        type="url"
+        data-pref="mineruOfficialEndpoint"
+        placeholder="暂留空；使用时填写官方 HTTPS 地址"
+    /></html:label>
+    <html:label data-mineru-modes="official-api"
+      >Token 环境变量
+      <html:input type="text" data-pref="mineruOfficialTokenEnvironment"
+    /></html:label>
+    <html:label data-mineru-modes="self-hosted"
+      >本地部署地址 <html:input type="url" data-pref="mineruSelfHostedEndpoint"
+    /></html:label>
+    <html:label data-mineru-modes="self-hosted"
+      ><html:input type="checkbox" data-pref="mineruSelfHostedAutoStart" />
+      服务未运行时自动启动 Docker Desktop 与 MinerU API</html:label
+    >
+    <html:label data-mineru-modes="self-hosted"
+      >MinerU Docker 项目目录
+      <html:input
+        type="text"
+        data-pref="mineruSelfHostedProjectDirectory"
+        placeholder="E:\software\DockerProject\MinerU"
+    /></html:label>
+    <html:label data-mineru-modes="self-hosted"
+      >Docker CLI
+      <html:input
+        type="text"
+        data-pref="mineruDockerExecutable"
+        placeholder="E:\software\docker\resources\bin\docker.exe"
+    /></html:label>
+    <html:label data-mineru-modes="self-hosted"
+      >Docker Desktop
+      <html:input
+        type="text"
+        data-pref="mineruDockerDesktopExecutable"
+        placeholder="E:\software\docker\Docker Desktop.exe"
+    /></html:label>
+    <html:label data-mineru-modes="self-hosted"
+      >本地后端 <html:input type="text" data-pref="mineruBackend"
+    /></html:label>
+    <html:label data-mineru-modes="official-api self-hosted"
+      >解析方式
+      <html:select data-pref="mineruMethod"
+        ><html:option value="auto">自动</html:option
+        ><html:option value="txt">文本</html:option
+        ><html:option value="ocr">OCR</html:option></html:select
+      ></html:label
+    >
+    <html:label data-mineru-modes="official-api"
+      >网页模型
+      <html:select data-pref="mineruModelVersion"
+        ><html:option value="vlm">VLM</html:option
+        ><html:option value="pipeline">Pipeline</html:option></html:select
+      ></html:label
+    >
+    <html:label data-mineru-modes="official-api self-hosted"
+      >语言 <html:input type="text" data-pref="mineruLanguage"
+    /></html:label>
+    <html:label data-mineru-modes="official-api self-hosted"
+      ><html:input type="checkbox" data-pref="mineruEnableFormula" />
+      识别公式</html:label
+    >
+    <html:label data-mineru-modes="official-api self-hosted"
+      ><html:input type="checkbox" data-pref="mineruEnableTable" />
+      识别表格</html:label
+    >
+    <html:label
+      >超时（毫秒）
+      <html:input type="number" min="10000" data-pref="mineruTimeoutMs"
+    /></html:label>
+    <html:p class="zrdb-pref-warning"
+      >网页 API Token 只从指定环境变量读取，不写入 Zotero
+      偏好或同步数据。转换时优先使用条目显式设置的主
+      PDF；未设置时自动选择标题为“PDF”的附件。</html:p
+    >
+    <html:button type="button" id="zrdb-mineru-test">连接测试</html:button>
+  </html:div>
+
+  <html:div class="zrdb-pref-actions"
+    ><html:span id="zrdb-pref-status"></html:span
+    ><html:button type="button" id="zrdb-pref-save"
+      >保存本机设置</html:button
+    ></html:div
+  >
 </groupbox>
-<vbox>
-  <html:label
-    data-l10n-id="pref-help"
-    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
-  ></html:label>
-</vbox>

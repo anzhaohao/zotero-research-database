@@ -8,7 +8,49 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "enable": boolean;
-      "input": string;
+      "artifactImportToken": string;
+      "artifactMetadataMigrationVersion": number;
+      "lastViewMode": string;
+      "defaultRowHeight": number;
+      "defaultView": string;
+      "hideMinerUArtifactsInNativeList": boolean;
+      "motionEnabled": boolean;
+      "density": string;
+      "cornerStrength": string;
+      "shadowStrength": string;
+      "defaultExportScope": string;
+      "zoteroFigureEnabled": boolean;
+      "zoteroFigureShowFigures": boolean;
+      "zoteroFigureShowTables": boolean;
+      "zoteroFigureShowFormulas": boolean;
+      "mineruFigureFallback": boolean;
+      "figureImageQuality": string;
+      "agentKind": string;
+      "agentExecutable": string;
+      "agentArgs": string;
+      "agentEndpoint": string;
+      "agentModel": string;
+      "agentTimeoutMs": number;
+      "agentSettingsVersion": number;
+      "mineruMode": string;
+      "mineruExecutable": string;
+      "mineruArgs": string;
+      "mineruDesktopOutputDirectory": string;
+      "mineruOfficialEndpoint": string;
+      "mineruOfficialTokenEnvironment": string;
+      "mineruSelfHostedEndpoint": string;
+      "mineruSelfHostedAutoStart": boolean;
+      "mineruSelfHostedProjectDirectory": string;
+      "mineruDockerExecutable": string;
+      "mineruDockerDesktopExecutable": string;
+      "mineruBackend": string;
+      "mineruMethod": string;
+      "mineruModelVersion": string;
+      "mineruLanguage": string;
+      "mineruEnableFormula": boolean;
+      "mineruEnableTable": boolean;
+      "mineruTimeoutMs": number;
+      "mineruSettingsVersion": number;
     };
   }
 }

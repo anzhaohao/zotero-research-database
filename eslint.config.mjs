@@ -12,5 +12,18 @@ export default zotero({
         "@typescript-eslint/no-unused-vars": "off",
       },
     },
+    {
+      files: ["design-prototypes/**/*.js"],
+      languageOptions: {
+        globals: {
+          clearTimeout: "readonly",
+          document: "readonly",
+          navigator: "readonly",
+          performance: "readonly",
+          requestAnimationFrame: "readonly",
+          setTimeout: "readonly",
+        },
+      },
+    },
   ],
 });

@@ -26,6 +26,46 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
    */
   const ctx = { rootURI };
   ctx._globalThis = ctx;
+  // Zotero bootstrap sandboxes do not expose the browser `console` object.
+  // React's development bundle reads it while the module is loading, before
+  // the plugin can attach itself to a Zotero window. Keep development/test
+  // builds usable by forwarding the standard methods to Zotero's debug log.
+  const writeConsole = (level, args) => {
+    const message = args
+      .map((value) => {
+        if (value instanceof Error) {
+          return value.stack || value.message;
+        }
+        if (typeof value === "string") {
+          return value;
+        }
+        try {
+          return JSON.stringify(value);
+        } catch (error) {
+          return String(value);
+        }
+      })
+      .join(" ");
+    if (level === "error") {
+      Zotero.logError(new Error(message));
+    } else {
+      Zotero.debug(`[${level}] ${message}`);
+    }
+  };
+  ctx.console = {
+    debug: (...args) => writeConsole("debug", args),
+    info: (...args) => writeConsole("info", args),
+    log: (...args) => writeConsole("log", args),
+    warn: (...args) => writeConsole("warn", args),
+    error: (...args) => writeConsole("error", args),
+    group: () => {},
+    groupCollapsed: () => {},
+    groupEnd: () => {},
+    trace: () => {},
+    time: () => {},
+    timeEnd: () => {},
+    timeStamp: () => {},
+  };
 
   Services.scriptloader.loadSubScript(
     `${rootURI}/content/scripts/__addonRef__.js`,

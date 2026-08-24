@@ -1,0 +1,25 @@
+/* C 版保留学术工作台结构，颜色与材质继承 Notion 主题。 */
+body[data-theme="academic"] {
+  --panel-radius: 9px;
+  --menu-radius: 10px;
+  --control-radius: 7px;
+  --mark-radius: 7px;
+  --panel-shadow: none;
+}
+
+body[data-theme="academic"] .topbar {
+  padding-top: 16px;
+  border-top: 0;
+}
+
+body[data-theme="academic"] .database-mark {
+  color: var(--accent-ink);
+}
+
+body[data-theme="academic"] .workspace {
+  box-shadow: none;
+}
+
+body[data-theme="academic"] .prototype-badge {
+  color: var(--muted);
+}
