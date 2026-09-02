@@ -1464,6 +1464,38 @@
   }
 }
 
+.zrdb-pref-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 12px 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--zrdb-line);
+}
+.zrdb-pref-tab {
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: GrayText;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.zrdb-pref-tab:hover {
+  color: CanvasText;
+  background: color-mix(in srgb, CanvasText 6%, Canvas);
+}
+.zrdb-pref-tab.is-active {
+  color: var(--zrdb-blue);
+  border-color: color-mix(in srgb, var(--zrdb-blue) 35%, var(--zrdb-line));
+  background: var(--zrdb-blue-soft);
+  font-weight: 600;
+}
+.zrdb-pref-panel[hidden] {
+  display: none !important;
+}
+
 .zrdb-pref-section {
   display: grid;
   gap: 8px;

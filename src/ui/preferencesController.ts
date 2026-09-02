@@ -118,6 +118,7 @@ export class PreferencesController {
     if (!root || root.dataset.zrdbBound === "1") return;
     this.root = root;
     root.dataset.zrdbBound = "1";
+    this.bindTabBar();
     this.loadLocalControls();
     this.bindLocalControls();
     this.bindAgentTests();
@@ -133,6 +134,27 @@ export class PreferencesController {
   private status(message: string): void {
     const target = this.root?.querySelector<HTMLElement>("#zrdb-pref-status");
     if (target) target.textContent = message;
+  }
+
+  private bindTabBar(): void {
+    if (!this.root) return;
+    const tabs: HTMLElement[] = Array.from(
+      this.root.querySelectorAll<HTMLElement>(".zrdb-pref-tab"),
+    );
+    const panels: HTMLElement[] = Array.from(
+      this.root.querySelectorAll<HTMLElement>(".zrdb-pref-panel"),
+    );
+    const select = (tab: HTMLElement): void => {
+      const target = tab.dataset.prefTab;
+      for (const entry of tabs) {
+        const active = entry === tab;
+        entry.classList.toggle("is-active", active);
+        entry.setAttribute("aria-selected", String(active));
+      }
+      for (const panel of panels)
+        panel.hidden = panel.dataset.prefPanel !== target;
+    };
+    for (const tab of tabs) tab.addEventListener("click", () => select(tab));
   }
 
   private loadLocalControls(): void {
