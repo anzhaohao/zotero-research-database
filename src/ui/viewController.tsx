@@ -8,11 +8,20 @@ import {
 } from "./ResearchDatabaseApp";
 import { getPref, setPref } from "../utils/prefs";
 import { SYNCED_SETTING_PREFIX } from "../domain/defaults";
-import { itemNotificationTouchesView, selectedTabType } from "./refreshPolicy";
+import {
+  isLibraryTabType,
+  itemNotificationTouchesView,
+  selectedTabType,
+} from "./refreshPolicy";
 import { onLocalResearchDataChanged } from "../storage/localData";
 import { NativeArtifactVisibilityController } from "./nativeArtifactVisibility";
 
 type ViewMode = "default" | DatabaseViewMode;
+
+function debugLog(message: string, data?: Record<string, unknown>): void {
+  const payload = data ? ` ${JSON.stringify(data)}` : "";
+  Zotero.debug(`[ZRDB] ${message}${payload}`);
+}
 
 export class MainViewController {
   private root?: Root;
@@ -31,7 +40,6 @@ export class MainViewController {
   private notifierID?: string;
   private notifyTimer?: number;
   private settleTimer?: number;
-  private reloadTimer?: number;
   private visibilityPrefObserverID?: symbol;
   private nativeArtifactVisibility?: NativeArtifactVisibilityController;
   private libraryTabActive = true;
@@ -95,10 +103,7 @@ export class MainViewController {
     container.appendChild(this.customPane);
     this.root = createRoot(this.customPane);
 
-    // During early startup Zotero may not have assigned the library tab type
-    // yet. Only a positively identified reader should suppress the first
-    // database render; later tab notifications provide the canonical type.
-    this.libraryTabActive = this.win.Zotero_Tabs.selectedType !== "reader";
+    this.libraryTabActive = isLibraryTabType(this.win.Zotero_Tabs.selectedType);
     this.nativeArtifactVisibility = new NativeArtifactVisibilityController(
       this.win.ZoteroPane.itemsView,
       this.repository,
@@ -171,7 +176,6 @@ export class MainViewController {
     this.nativeArtifactVisibility = undefined;
     this.destroySourceChangeListeners();
     this.cancelScheduledRefresh();
-    this.cancelDatabaseViewReload();
     this.setNativePaneHidden(false);
     this.root?.unmount();
     this.toggleButton?.remove();
@@ -224,20 +228,26 @@ export class MainViewController {
   ): void {
     if (type === "tab") {
       if (event !== "select") return;
-      const nextLibraryTabActive =
-        selectedTabType(ids, extraData, this.win.Zotero_Tabs.selectedType) ===
-        "zotero-pane";
+      const notifiedType = selectedTabType(
+        ids,
+        extraData,
+        this.win.Zotero_Tabs.selectedType,
+      );
+      const nextLibraryTabActive = isLibraryTabType(notifiedType);
+      debugLog("tab/select notification", {
+        notifiedType,
+        nextLibraryTabActive,
+        mode: this.mode,
+      });
       this.libraryTabActive = nextLibraryTabActive;
       if (!nextLibraryTabActive) {
         this.cancelScheduledRefresh();
-        this.cancelDatabaseViewReload();
         return;
       }
-      // A PDF reader can leave React's virtualized table with the item range
-      // from the article that opened it. Recreate only this plugin's React
-      // root after Zotero's ItemTree has had time to settle; do not restart
-      // Zotero or re-register the controller, toolbar, notifier, or observers.
-      if (this.mode !== "default") this.scheduleDatabaseViewReload();
+      // Zotero reports the library content type as `library`; `zotero-pane`
+      // is the tab ID, not the selected tab type. Keep the existing React tree
+      // and read the current ItemTree range after the tab transition.
+      if (this.mode !== "default") this.scheduleSourceRefresh();
       return;
     }
 
@@ -340,9 +350,13 @@ export class MainViewController {
 
     const MutationObserverCtor = this.win.MutationObserver;
     if (MutationObserverCtor && this.nativePane) {
-      const observer = new MutationObserverCtor(() =>
-        this.scheduleSourceRefresh(),
-      );
+      let lastRefreshAt = 0;
+      const observer = new MutationObserverCtor(() => {
+        const now = Date.now();
+        if (now - lastRefreshAt < 100) return;
+        lastRefreshAt = now;
+        this.scheduleSourceRefresh();
+      });
       observer.observe(this.nativePane, {
         childList: true,
         subtree: true,
@@ -383,48 +397,6 @@ export class MainViewController {
   }
 
   /**
-   * Re-mount the database view after returning from Zotero's PDF reader.
-   * This deliberately preserves the controller and its native registrations;
-   * only the React tree that owns the custom table is replaced.
-   */
-  private scheduleDatabaseViewReload(): void {
-    if (this.mode === "default") return;
-    this.cancelDatabaseViewReload();
-    this.reloadTimer = this.win.setTimeout(() => {
-      this.reloadTimer = undefined;
-      if (
-        this.mode === "default" ||
-        this.win.Zotero_Tabs.selectedType !== "zotero-pane" ||
-        !this.customPane
-      ) {
-        return;
-      }
-      try {
-        this.activateReactWindowContext();
-        this.libraryTabActive = true;
-        this.cancelScheduledRefresh();
-        this.root?.unmount();
-        this.customPane.replaceChildren();
-        this.root = createRoot(this.customPane);
-        // Both snapshots read ZoteroPane.getSortedItems() at render time,
-        // after the reader and native ItemTree have finished their transition.
-        this.scheduleSourceRefresh();
-      } catch (error) {
-        Zotero.logError(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-        this.setMode("default");
-      }
-    }, 230);
-  }
-
-  private cancelDatabaseViewReload(): void {
-    if (this.reloadTimer === undefined) return;
-    this.win.clearTimeout(this.reloadTimer);
-    this.reloadTimer = undefined;
-  }
-
-  /**
    * Reader-originated actions can return to the library without delivering the
    * normal `tab/select` notifier event to a bootstrap add-on. Do not let that
    * missed event permanently suppress collection/item-tree refreshes. The
@@ -433,9 +405,9 @@ export class MainViewController {
    */
   private ensureLibraryTabIsActive(): boolean {
     if (this.libraryTabActive) return true;
-    if (this.win.Zotero_Tabs.selectedType !== "zotero-pane") return false;
+    if (!isLibraryTabType(this.win.Zotero_Tabs.selectedType)) return false;
     this.libraryTabActive = true;
-    if (this.mode !== "default") this.scheduleDatabaseViewReload();
+    if (this.mode !== "default") this.scheduleSourceRefresh();
     return true;
   }
 
@@ -445,6 +417,11 @@ export class MainViewController {
       this.mode === "default" ||
       !this.ensureLibraryTabIsActive()
     ) {
+      debugLog("render skipped", {
+        hasRoot: Boolean(this.root),
+        mode: this.mode,
+        libraryTabActive: this.libraryTabActive,
+      });
       return;
     }
     try {
@@ -458,6 +435,11 @@ export class MainViewController {
           !item.deleted &&
           !this.isWorkspaceItem(item),
       );
+      debugLog("render", {
+        sortedCount: sorted.length,
+        itemCount: items.length,
+        firstTitle: items[0]?.getField("title")?.toString()?.slice(0, 30),
+      });
       this.root.render(
         <ResearchDatabaseApp
           mode={this.mode}

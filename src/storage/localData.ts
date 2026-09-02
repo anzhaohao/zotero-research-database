@@ -7,7 +7,7 @@ import {
 } from "./syncedData";
 import { parseWorkspacePayload } from "../core/codec";
 
-interface LocalPayload {
+export interface LocalPayload {
   schemaVersion: 1;
   workspaceLibraryID?: number;
   workspace?: WorkspaceState;
@@ -35,6 +35,7 @@ const changeListeners = new Set<(change: LocalResearchDataChange) => void>();
 interface LocalIOUtils {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<Uint8Array>;
+  write?(path: string, bytes: Uint8Array): Promise<void>;
   writeUTF8?(path: string, content: string): Promise<void>;
   move?(
     sourcePath: string,
@@ -94,6 +95,11 @@ function localPath(): string | undefined {
   );
 }
 
+function localBackupPath(): string | undefined {
+  const path = localPath();
+  return path ? `${path}.bak` : undefined;
+}
+
 /**
  * Zotero exposes platform namespaces as lexical globals in some sandboxes,
  * but as globalThis properties in others (notably the Node-side test runner).
@@ -121,7 +127,7 @@ function emptyPayload(): LocalPayload {
   return { schemaVersion: 1, items: {} };
 }
 
-function parsePayload(value: unknown): LocalPayload {
+export function parseLocalPayload(value: unknown): LocalPayload {
   const raw = value as Partial<LocalPayload>;
   if (
     !raw ||
@@ -150,6 +156,27 @@ function parsePayload(value: unknown): LocalPayload {
         : parseWorkspacePayload(raw.workspace),
     items,
   };
+}
+
+export async function getLocalPayloadSnapshot(): Promise<LocalPayload> {
+  await new ResearchLocalStore().ready();
+  return clone(sharedPayload);
+}
+
+export async function replaceLocalPayload(
+  value: unknown,
+  options: { backupCurrent?: boolean } = {},
+): Promise<void> {
+  const next = parseLocalPayload(value);
+  await new ResearchLocalStore().ready();
+  const previous = sharedPayload;
+  sharedPayload = clone(next);
+  try {
+    await persistSharedPayload("all", options);
+  } catch (error) {
+    sharedPayload = previous;
+    throw error;
+  }
 }
 
 /**
@@ -219,7 +246,7 @@ export class ResearchLocalStore implements ResearchDataStore {
     let raw: string;
     try {
       raw = new TextDecoder().decode(await io.read(path));
-      sharedPayload = parsePayload(JSON.parse(raw));
+      sharedPayload = parseLocalPayload(JSON.parse(raw));
     } catch (error) {
       throw new Error(
         "本机研究数据库文件无法读取；为保护数据，插件没有覆盖或删除原文件",
@@ -232,51 +259,67 @@ export class ResearchLocalStore implements ResearchDataStore {
   private async persist(
     changeScope: ResearchDataChangeScope = "all",
   ): Promise<void> {
-    const path = localPath();
-    const io = runtimeIOUtils();
-    if (
-      !path ||
-      typeof io?.writeUTF8 !== "function" ||
-      typeof io.makeDirectory !== "function"
-    ) {
-      emitChange(changeScope);
-      return;
-    }
-    const pathUtils = runtimePathUtils();
-    if (!pathUtils?.profileDir || typeof pathUtils.join !== "function") {
-      emitChange(changeScope);
-      return;
-    }
-    const directory = pathUtils.join(
-      pathUtils.profileDir,
-      "zotero-research-database",
-    );
-    const content = JSON.stringify(sharedPayload, null, 2);
-    const temporaryPath = `${path}.${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2)}.tmp`;
-    // Recover the queue after one failed write. The failed caller still gets
-    // its error, while a later edit can retry instead of inheriting a rejected
-    // promise forever.
-    sharedWriteQueue = sharedWriteQueue
-      .catch(() => undefined)
-      .then(async () => {
-        await io.makeDirectory!(directory, { ignoreExisting: true });
-        await io.writeUTF8!(temporaryPath, content);
-        try {
-          if (typeof io.move !== "function") {
-            // Older test doubles may not expose move; Zotero 9 does.
-            await io.writeUTF8!(path, content);
-          } else {
-            await io.move(temporaryPath, path, { noOverwrite: false });
-          }
-        } finally {
-          if (typeof io.remove === "function") {
-            await io.remove(temporaryPath, { ignoreAbsent: true });
-          }
-        }
-      });
-    await sharedWriteQueue;
-    emitChange(changeScope);
+    await persistSharedPayload(changeScope);
   }
+}
+
+async function persistSharedPayload(
+  changeScope: ResearchDataChangeScope = "all",
+  options: { backupCurrent?: boolean } = {},
+): Promise<void> {
+  const path = localPath();
+  const io = runtimeIOUtils();
+  if (
+    !path ||
+    typeof io?.writeUTF8 !== "function" ||
+    typeof io.makeDirectory !== "function"
+  ) {
+    emitChange(changeScope);
+    return;
+  }
+  const pathUtils = runtimePathUtils();
+  if (!pathUtils?.profileDir || typeof pathUtils.join !== "function") {
+    emitChange(changeScope);
+    return;
+  }
+  const directory = pathUtils.join(
+    pathUtils.profileDir,
+    "zotero-research-database",
+  );
+  const content = JSON.stringify(sharedPayload, null, 2);
+  const temporaryPath = `${path}.${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.tmp`;
+  // Recover the queue after one failed write. The failed caller still gets
+  // its error, while a later edit can retry instead of inheriting a rejected
+  // promise forever.
+  sharedWriteQueue = sharedWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await io.makeDirectory!(directory, { ignoreExisting: true });
+      if (options.backupCurrent && (await io.exists(path))) {
+        const backupPath = localBackupPath();
+        if (!backupPath) throw new Error("无法确定本机研究数据库备份路径");
+        const bytes = await io.read(path);
+        if (typeof io.write === "function") await io.write(backupPath, bytes);
+        else if (typeof io.writeUTF8 === "function")
+          await io.writeUTF8(backupPath, new TextDecoder().decode(bytes));
+        else throw new Error("当前 Zotero 不支持写入研究数据库备份");
+      }
+      await io.writeUTF8!(temporaryPath, content);
+      try {
+        if (typeof io.move !== "function") {
+          // Older test doubles may not expose move; Zotero 9 does.
+          await io.writeUTF8!(path, content);
+        } else {
+          await io.move(temporaryPath, path, { noOverwrite: false });
+        }
+      } finally {
+        if (typeof io.remove === "function") {
+          await io.remove(temporaryPath, { ignoreAbsent: true });
+        }
+      }
+    });
+  await sharedWriteQueue;
+  emitChange(changeScope);
 }

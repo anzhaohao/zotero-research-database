@@ -309,6 +309,19 @@
     <html:button type="button" id="zrdb-mineru-test">连接测试</html:button>
   </html:div>
 
+  <html:div class="zrdb-pref-section">
+    <html:h3>数据备份</html:h3>
+    <html:p
+      >导出本机研究属性、锁定、图表记录与本机设置，方便迁移到另一台电脑。备份不包含
+      artifactImportToken 等敏感凭据；导入时按 itemKey → DOI →
+      标题严格匹配，存在歧义或冲突的条目不会导入。</html:p
+    >
+    <html:div class="zrdb-pref-inline-actions">
+      <html:button type="button" id="zrdb-backup-export">导出备份</html:button>
+      <html:button type="button" id="zrdb-backup-import">导入备份</html:button>
+    </html:div>
+  </html:div>
+
   <html:div class="zrdb-pref-actions"
     ><html:span id="zrdb-pref-status"></html:span
     ><html:button type="button" id="zrdb-pref-save"

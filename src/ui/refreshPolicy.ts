@@ -41,3 +41,7 @@ export function selectedTabType(
     ? notifiedType
     : String(fallbackType || "");
 }
+
+export function isLibraryTabType(type: unknown): boolean {
+  return type === "library";
+}

@@ -16,12 +16,32 @@ import { ensureCitationStylesReady } from "./services/citation";
 const itemPaneProperties = new ItemPaneProperties();
 const migrationRepository = new ResearchRepository();
 
+/**
+ * Register the plugin preferences pane so "Zotero Research Database" appears
+ * in Zotero settings. The pane is unregistered automatically on shutdown.
+ */
+async function registerPreferencePane(): Promise<void> {
+  try {
+    await Zotero.PreferencePanes.register({
+      pluginID: config.addonID,
+      id: "zrdb-preferences",
+      src: "content/preferences.xhtml",
+      label: config.addonName,
+      image: "content/icons/favicon.png",
+    });
+  } catch (error) {
+    // Never block Zotero startup on settings registration.
+    Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
 async function onStartup() {
   await Promise.all([
     Zotero.initializationPromise,
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
+  await registerPreferencePane();
   migrateAgentPreferences();
   migrateMinerUPreferences();
   try {

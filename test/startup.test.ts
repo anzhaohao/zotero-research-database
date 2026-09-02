@@ -1472,20 +1472,20 @@ describe("startup", function () {
       const toolbarButtonCountBefore = doc.querySelectorAll(
         `#${config.addonRef}-view-toggle`,
       ).length;
-      // Returning from the PDF reader must replace the table's React root, so
-      // stale virtualized rows from article A cannot survive the transition.
+      // Returning from the PDF reader should refresh the existing React tree
+      // with the current library range instead of rebuilding the root.
       controller.handleNotification("select", "tab", ["reader-return-test"], {
         "reader-return-test": { type: "reader" },
       });
       assert.isFalse(controller.libraryTabActive);
       currentItems = [second];
       controller.handleNotification("select", "tab", ["library-return-test"], {
-        "library-return-test": { type: "zotero-pane" },
+        "library-return-test": { type: "library" },
       });
       await waitForRows("ZRDB collection source B", "ZRDB collection source A");
       assert.include(customPane!.textContent || "", "当前范围 · 1 篇");
       assert.isTrue(controller.libraryTabActive);
-      assert.notEqual(controller.root, firstRoot);
+      assert.equal(controller.root, firstRoot);
       assert.equal(
         doc.querySelectorAll(`#${config.addonRef}-view-toggle`).length,
         toolbarButtonCountBefore,
@@ -1920,7 +1920,7 @@ describe("startup", function () {
       assert.equal(renderCount, 0);
 
       controller.handleNotification("select", "tab", ["library-test"], {
-        "library-test": { type: "zotero-pane" },
+        "library-test": { type: "library" },
       });
       controller.refreshListener();
       controller.refreshListener();
@@ -1928,7 +1928,6 @@ describe("startup", function () {
       assert.equal(renderCount, 1);
     } finally {
       controller.cancelScheduledRefresh();
-      controller.cancelDatabaseViewReload();
       controller.render = originalRender;
       controller.mode = originalMode;
       controller.libraryTabActive = originalLibraryTabActive;

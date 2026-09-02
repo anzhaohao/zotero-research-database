@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import {
+  isLibraryTabType,
   itemNotificationTouchesView,
   selectedTabType,
   type RefreshPolicyItem,
@@ -56,9 +57,15 @@ describe("database view refresh policy", function () {
       selectedTabType(
         ["reader-1"],
         { "reader-1": { type: "reader" } },
-        "zotero-pane",
+        "library",
       ),
     ).to.equal("reader");
-    expect(selectedTabType([], {}, "zotero-pane")).to.equal("zotero-pane");
+    expect(selectedTabType([], {}, "library")).to.equal("library");
+  });
+
+  it("recognizes Zotero's library content type rather than its tab ID", function () {
+    expect(isLibraryTabType("library")).to.equal(true);
+    expect(isLibraryTabType("zotero-pane")).to.equal(false);
+    expect(isLibraryTabType("reader")).to.equal(false);
   });
 });

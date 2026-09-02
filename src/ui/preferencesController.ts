@@ -13,6 +13,12 @@ import {
   MinerUConversionService,
   parseMinerUProfile,
 } from "../services/mineru";
+import {
+  createBackupZip,
+  formatImportReport,
+  importBackupZip,
+  suggestedBackupFileName,
+} from "../services/backup";
 import { ResearchRepository } from "../storage/repository";
 import { getPref, setPref } from "../utils/prefs";
 
@@ -175,6 +181,67 @@ export class PreferencesController {
           this.status(error instanceof Error ? error.message : String(error));
         }
       });
+    this.root
+      ?.querySelector("#zrdb-backup-export")
+      ?.addEventListener("click", () => {
+        void this.exportBackup();
+      });
+    this.root
+      ?.querySelector("#zrdb-backup-import")
+      ?.addEventListener("click", () => {
+        void this.importBackup();
+      });
+  }
+
+  private async exportBackup(): Promise<void> {
+    try {
+      this.status("正在生成备份……");
+      const bytes = await createBackupZip();
+      const picker = new this.win.FilePicker();
+      picker.init(this.win, "导出研究数据库备份", picker.modeSave, [
+        ["ZIP 备份 (*.zip)", "*.zip"],
+      ]);
+      picker.defaultString = suggestedBackupFileName();
+      picker.defaultExtension = "zip";
+      const result = await picker.show();
+      if (result !== picker.returnOK && result !== picker.returnReplace) {
+        this.status("已取消导出");
+        return;
+      }
+      if (!picker.file) throw new Error("未选择备份保存位置");
+      await (
+        IOUtils as unknown as {
+          write(path: string, data: Uint8Array): Promise<void>;
+        }
+      ).write(picker.file, bytes);
+      this.status(`备份已导出到 ${picker.file}`);
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async importBackup(): Promise<void> {
+    try {
+      const picker = new this.win.FilePicker();
+      picker.init(this.win, "导入研究数据库备份", picker.modeOpen, [
+        ["ZIP 备份 (*.zip)", "*.zip"],
+      ]);
+      const result = await picker.show();
+      if (result !== picker.returnOK || !picker.file) {
+        this.status("已取消导入");
+        return;
+      }
+      this.status("正在校验备份……");
+      const bytes = await IOUtils.read(picker.file);
+      const report = await importBackupZip(bytes);
+      this.loadLocalControls();
+      this.workspace = await this.repository.loadWorkspace();
+      this.fields = cloneFields(this.workspace.fields);
+      this.renderFields();
+      this.status(formatImportReport(report));
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private bindAgentTests(): void {
