@@ -35,6 +35,14 @@ export const CODEX_WORKER_FLAGS = [
   "skill_search",
   "--disable",
   "skill_mcp_dependency_install",
+  // Codex 0.152 still discovers the host `.agents/skills` root through the
+  // Windows known profile directory.  Keep the opt-out enabled for versions
+  // that honor it; older versions simply ignore it and are handled by the
+  // diagnostic/output fallback below.
+  "--config",
+  "features.skip_host_skill_discovery=true",
+  "--config",
+  "skills.include_instructions=false",
   "--ignore-rules",
 ] as const;
 
@@ -69,6 +77,13 @@ export function buildCodexWorkerArguments(
     workdir,
     "-",
   ];
+}
+
+/** A malformed optional skill can make Codex return code 1 after writing JSON. */
+export function isRecoverableCodexSkillError(stderr: string): boolean {
+  return /failed to load skill[\s\S]*(?:missing YAML frontmatter|delimited by ---)/i.test(
+    stderr,
+  );
 }
 
 interface ProcessHandle {
@@ -331,7 +346,15 @@ export class CodexAgentBridge implements AgentBridge {
         ),
         // Keep authentication/provider routing available while preventing the
         // worker from traversing the real ~/.codex/skills junctions.
-        environment: { CODEX_HOME: codexHome },
+        environment: {
+          CODEX_HOME: codexHome,
+          // These names are understood by newer host integrations and are
+          // harmless on older CLIs.  Point them at the transient home so a
+          // global skills-manager junction cannot become a task dependency.
+          CODEX_SKILLS_DIR: PathUtils.join(codexHome, "skills"),
+          CODEX_HOST_SKILLS_DIR: PathUtils.join(codexHome, "skills"),
+          CODEX_DISABLE_HOST_SKILLS: "1",
+        },
         environmentAppend: true,
         stderr: "pipe",
         workdir: directory,
@@ -349,6 +372,23 @@ export class CodexAgentBridge implements AgentBridge {
       const output = await stdout;
       const errors = await stderr;
       if (result.exitCode !== 0) {
+        if (isRecoverableCodexSkillError(errors)) {
+          try {
+            const content = await Zotero.File.getContentsAsync(
+              outputPath,
+              "utf-8",
+            );
+            if (typeof content === "string" && content.trim()) {
+              try {
+                return JSON.parse(content);
+              } catch {
+                // Fall through to the actionable process error below.
+              }
+            }
+          } catch {
+            // The worker may fail before creating its output file.
+          }
+        }
         throw new Error(
           `Codex 任务失败（退出码 ${result.exitCode}）：${tail(
             errors || output,

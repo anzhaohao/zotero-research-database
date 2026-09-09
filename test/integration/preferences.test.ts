@@ -266,6 +266,24 @@ describe("preferences persistence in the real Zotero settings window", function 
       const motion = control(win!, "motionEnabled") as HTMLInputElement;
       if (!motion.checked) await clickVisible(win!, motion);
       await open("agent");
+      stage = "verify model picker choices";
+      const modelSelect = win!.document.getElementById(
+        "zrdb-agent-model-select",
+      ) as HTMLSelectElement | null;
+      assert.exists(modelSelect, "model picker is a real select control");
+      assert.exists(
+        modelSelect?.querySelector('option[value="gpt-5.6-sol"]'),
+        "Codex model choices are visible",
+      );
+      if (modelSelect) {
+        modelSelect.value = "gpt-5.6-sol";
+        modelSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+        assert.strictEqual(
+          (control(win!, "agentModel") as HTMLInputElement).value,
+          "gpt-5.6-sol",
+          "selecting a model updates the persisted control",
+        );
+      }
       stage = "change string value";
       setValue("agentModel", String(expected.agentModel));
       await open("mineru");

@@ -1605,6 +1605,16 @@ button.zrdb-view-toggle:active {
   gap: 8px;
   color: CanvasText;
 }
+.zrdb-pref-section label.zrdb-agent-model-control {
+  flex-wrap: wrap;
+}
+.zrdb-agent-model-control select {
+  min-width: 260px;
+}
+.zrdb-agent-model-control input {
+  flex: 1 1 220px;
+  min-width: 220px;
+}
 .zrdb-pref-section input:not([type="checkbox"]),
 .zrdb-pref-section select {
   min-width: 220px;

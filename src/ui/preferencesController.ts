@@ -461,21 +461,30 @@ export class PreferencesController {
       ?.addEventListener("change", () => this.updateModeVisibility());
   }
 
-  /** Add friendly model suggestions while keeping the field editable. */
+  /** Populate a real select so model choices are discoverable in Zotero's XHTML UI. */
   private bindAgentModelPicker(): void {
     if (!this.root) return;
-    const input = this.root.querySelector<HTMLInputElement>(
-      '[data-pref="agentModel"]',
+    const select = this.root.querySelector<HTMLSelectElement>(
+      "#zrdb-agent-model-select",
     );
-    if (!input) return;
-    const listId = "zrdb-agent-model-options";
-    let list = this.root.querySelector<HTMLDataListElement>(`#${listId}`);
-    if (!list) {
-      list = this.win.document.createElement("datalist");
-      list.id = listId;
-      input.after(list);
-    }
-    input.setAttribute("list", listId);
+    const input = this.root.querySelector<HTMLInputElement>(
+      "#zrdb-agent-model-custom",
+    );
+    if (!select || !input) return;
+    const syncFromSelect = (): void => {
+      const custom = select.value === "__custom__";
+      input.hidden = !custom;
+      if (!custom) input.value = select.value;
+    };
+    select.addEventListener("change", syncFromSelect);
+    input.addEventListener("input", () => {
+      if (select.value !== "__custom__") select.value = "__custom__";
+    });
+    this.root
+      .querySelector("#zrdb-agent-model-refresh")
+      ?.addEventListener("click", () => {
+        void this.refreshAgentModelOptions();
+      });
     this.root
       .querySelector('[data-pref="agentEndpoint"]')
       ?.addEventListener("change", () => {
@@ -488,12 +497,12 @@ export class PreferencesController {
   private async refreshAgentModelOptions(): Promise<void> {
     if (!this.root) return;
     const input = this.root.querySelector<HTMLInputElement>(
-      '[data-pref="agentModel"]',
+      "#zrdb-agent-model-custom",
     );
-    const list = this.root.querySelector<HTMLDataListElement>(
-      "#zrdb-agent-model-options",
+    const select = this.root.querySelector<HTMLSelectElement>(
+      "#zrdb-agent-model-select",
     );
-    if (!input || !list) return;
+    if (!input || !select) return;
     const kind = String(
       inputValue(this.root, "agentKind"),
     ) as AgentProfile["kind"];
@@ -518,16 +527,27 @@ export class PreferencesController {
     }
     if (requestId !== this.agentModelRequestId) return;
     const current = input.value.trim();
-    if (current && !options.some((option) => option.value === current))
-      options.unshift({ value: current, label: `${current}（当前值）` });
-    list.replaceChildren(
-      ...options.map((option) => {
+    const isKnown = options.some((option) => option.value === current);
+    const customOption = { value: "__custom__", label: "自定义模型…" };
+    const visibleOptions = [...options, customOption];
+    if (current && !isKnown)
+      visibleOptions.splice(visibleOptions.length - 1, 0, {
+        value: current,
+        label: `${current}（当前值）`,
+      });
+    select.replaceChildren(
+      ...visibleOptions.map((option) => {
         const element = this.win.document.createElement("option");
         element.value = option.value;
         element.label = option.label;
+        element.textContent = option.label;
         return element;
       }),
     );
+    if (current && isKnown) select.value = current;
+    else if (current) select.value = "__custom__";
+    else select.value = options[0]?.value || "";
+    input.hidden = select.value !== "__custom__";
   }
 
   private updateModeVisibility(): void {

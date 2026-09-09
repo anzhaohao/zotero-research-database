@@ -6,6 +6,7 @@ import {
   buildCodexWorkerArguments,
   CODEX_WORKER_FLAGS,
   fetchWithTimeout,
+  isRecoverableCodexSkillError,
   listOllamaModels,
   resolveCompatibleWebSocketConstructor,
   validateExtractedValues,
@@ -27,10 +28,25 @@ describe("external Codex bridge", function () {
       "skill_search",
       "--disable",
       "skill_mcp_dependency_install",
+      "--config",
+      "features.skip_host_skill_discovery=true",
+      "--config",
+      "skills.include_instructions=false",
     ]);
     expect(args).to.include.members(["--model", "qwen3.8-27b"]);
     expect(args).to.include.members(["--add-dir", "C:\\Papers"]);
     expect(CODEX_WORKER_FLAGS).to.include("--disable");
+  });
+
+  it("recognizes malformed optional skill errors as recoverable", function () {
+    expect(
+      isRecoverableCodexSkillError(
+        "failed to load skill C:\\skills\\officecli\\SKILL.md: missing YAML frontmatter delimited by ---",
+      ),
+    ).to.equal(true);
+    expect(isRecoverableCodexSkillError("authentication failed")).to.equal(
+      false,
+    );
   });
 
   it("lists and sorts models advertised by local Ollama", async function () {
