@@ -8,9 +8,23 @@ import type {
 import { getPref, setPref } from "../utils/prefs";
 import { resolvePrimaryPdf } from "./primaryPdf";
 import { setCurrentArtifact } from "./artifactMetadata";
-import { ResearchRepository } from "../storage/repository";
+import type { ResearchRepository } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
+import {
+  createManagedAttachment,
+  createManagedAttachmentUnlocked,
+  rollbackManagedAttachments,
+  withArtifactStorageItemLock,
+} from "./artifactStorage";
 
-const repository = new ResearchRepository();
+export type ArtifactImportRepository = Pick<
+  ResearchRepository,
+  | "loadArtifacts"
+  | "loadFigures"
+  | "saveManifests"
+  | "loadPrimaryPdfKey"
+  | "savePrimaryPdfKey"
+>;
 
 export function ensureArtifactImportToken(): string {
   const current = String(getPref(API_TOKEN_PREF) || "");
@@ -27,14 +41,23 @@ export function rotateArtifactImportToken(): string {
   return ensureArtifactImportToken();
 }
 
-export function registerArtifactEndpoint(): void {
+export function registerArtifactEndpoint(
+  repository: ArtifactImportRepository = getResearchRepository(),
+  createAttachment = createManagedAttachment,
+): void {
   ensureArtifactImportToken();
-  (Zotero.Server.Endpoints as any)[API_ENDPOINT] = class {
+  Zotero.Server.Endpoints[API_ENDPOINT] = class {
     supportedMethods = ["POST"];
     supportedDataTypes = ["application/json"];
     allowRequestsFromUnsafeWebContent = false;
 
-    async init({ headers, data }: any) {
+    async init({
+      headers,
+      data,
+    }: {
+      headers: Record<string, string>;
+      data: unknown;
+    }) {
       const requestToken = Object.entries(headers || {}).find(
         ([name]) => name.toLowerCase() === "x-zrdb-token",
       )?.[1];
@@ -46,7 +69,11 @@ export function registerArtifactEndpoint(): void {
         ];
       }
       try {
-        const result = await importArtifacts(validateRequest(data));
+        const result = await importArtifacts(
+          validateRequest(data),
+          repository,
+          createAttachment,
+        );
         return [200, "application/json", JSON.stringify(result)];
       } catch (error) {
         Zotero.logError(
@@ -65,11 +92,13 @@ export function registerArtifactEndpoint(): void {
 }
 
 export function unregisterArtifactEndpoint(): void {
-  delete (Zotero.Server.Endpoints as any)[API_ENDPOINT];
+  delete Zotero.Server.Endpoints[API_ENDPOINT];
 }
 
 export async function importArtifacts(
   request: ArtifactImportRequest,
+  repository: ArtifactImportRepository = getResearchRepository(),
+  createAttachment = createManagedAttachment,
 ): Promise<object> {
   if (request.libraryID !== Zotero.Libraries.userLibraryID) {
     throw new Error("第一版只接受个人库产物");
@@ -81,17 +110,65 @@ export async function importArtifacts(
   if (parent === false || !parent.isRegularItem()) {
     throw new Error("找不到对应的 Zotero 父条目");
   }
-  const results = [];
-  for (const artifact of request.artifacts) {
-    results.push(await importOne(parent, request.workflowRunID, artifact));
-  }
-  return { ok: true, parentItemKey: parent.key, artifacts: results };
+  return withArtifactStorageItemLock(parent.key, async () => {
+    const originalArtifacts = await repository.loadArtifacts(parent);
+    const originalFigures = await repository.loadFigures(parent);
+    const originalChildren = await Zotero.Items.getAsync(
+      parent.getAttachments(),
+    );
+    const originalKeys = new Set(originalChildren.map((child) => child.key));
+    const results = [];
+    const transactionCreateAttachment =
+      createAttachment === createManagedAttachment
+        ? createManagedAttachmentUnlocked
+        : createAttachment;
+    try {
+      for (const artifact of request.artifacts) {
+        results.push(
+          await importOne(
+            parent,
+            request.workflowRunID,
+            artifact,
+            repository,
+            transactionCreateAttachment,
+          ),
+        );
+      }
+      return { ok: true, parentItemKey: parent.key, artifacts: results };
+    } catch (error) {
+      // Restore repository metadata and remove only attachments created by this
+      // request. Existing user attachments are never touched.
+      await repository.saveManifests(
+        parent,
+        originalArtifacts,
+        originalFigures,
+      );
+      const currentChildren = await Zotero.Items.getAsync(
+        parent.getAttachments(),
+      );
+      const created = currentChildren.filter(
+        (child) => !originalKeys.has(child.key),
+      );
+      await rollbackManagedAttachments(
+        parent.key,
+        created.map((child) => child.key),
+        undefined,
+        true,
+      ).catch(() => undefined);
+      for (const child of created) {
+        await child.eraseTx().catch(() => undefined);
+      }
+      throw error;
+    }
+  });
 }
 
 async function importOne(
   parent: Zotero.Item,
   runID: string,
   artifact: ArtifactImport,
+  repository: ArtifactImportRepository,
+  createAttachment: typeof createManagedAttachment,
 ): Promise<object> {
   const isFigure = artifact.role === "figure" || artifact.role === "table";
   if (!isFigure && !artifact.path.toLowerCase().endsWith(".md"))
@@ -139,12 +216,14 @@ async function importOne(
         artifact,
         actualHash,
         children,
+        repository,
       );
-      await saveParentManifests(
+      await saveParentManifests({
         parent,
-        nextArtifacts,
-        replaceFigure(figures, figure),
-      );
+        artifacts: nextArtifacts,
+        repository,
+        figures: replaceFigure(figures, figure),
+      });
       return {
         role: artifact.role,
         figureID: metadata.id,
@@ -152,16 +231,22 @@ async function importOne(
         status: "unchanged",
       };
     }
-    const imported = await Zotero.Attachments.importFromFile({
-      file: artifact.path,
-      parentItemID: parent.id,
-      title: artifact.title,
-    } as any);
+    const imported = await createAttachment(
+      parent,
+      artifact.path,
+      artifact.title,
+      {
+        role: artifact.role,
+        runID,
+        figureID: metadata.id,
+      },
+    );
     const managed = figureManagedArtifact(
-      imported,
+      imported.attachment,
       runID,
       artifact,
-      actualHash,
+      imported.sha256,
+      imported.relativePath,
     );
     const nextArtifacts = setCurrentArtifact(
       currentArtifacts,
@@ -170,20 +255,22 @@ async function importOne(
     );
     const figure = await createFigureArtifact(
       parent,
-      imported,
+      imported.attachment,
       artifact,
-      actualHash,
+      imported.sha256,
       children,
+      repository,
     );
-    await saveParentManifests(
+    await saveParentManifests({
       parent,
-      nextArtifacts,
-      replaceFigure(figures, figure),
-    );
+      artifacts: nextArtifacts,
+      repository,
+      figures: replaceFigure(figures, figure),
+    });
     return {
       role: artifact.role,
       figureID: metadata.id,
-      attachmentID: imported.id,
+      attachmentID: imported.attachment.id,
       status: "imported",
     };
   }
@@ -198,42 +285,51 @@ async function importOne(
       attachmentKey: duplicate.key,
       role: artifact.role,
       sha256: actualHash,
+      relativePath: duplicateMetadata?.relativePath,
       runID,
     };
-    await saveParentManifests(
+    await saveParentManifests({
       parent,
-      setCurrentArtifact(
+      artifacts: setCurrentArtifact(
         currentArtifacts,
         managed,
         (entry) => entry.role === artifact.role,
       ),
-    );
+      repository,
+    });
     return {
       role: artifact.role,
       attachmentID: duplicate.id,
       status: "unchanged",
     };
   }
-  const imported = await Zotero.Attachments.importFromFile({
-    file: artifact.path,
-    parentItemID: parent.id,
-    title: artifact.title,
-  } as any);
+  const imported = await createAttachment(
+    parent,
+    artifact.path,
+    artifact.title,
+    { role: artifact.role, runID },
+  );
   const managed: ManagedArtifact = {
-    attachmentKey: imported.key,
+    attachmentKey: imported.attachment.key,
     role: artifact.role,
-    sha256: actualHash,
+    sha256: imported.sha256,
+    relativePath: imported.relativePath,
     runID,
   };
-  await saveParentManifests(
+  await saveParentManifests({
     parent,
-    setCurrentArtifact(
+    artifacts: setCurrentArtifact(
       currentArtifacts,
       managed,
       (entry) => entry.role === artifact.role,
     ),
-  );
-  return { role: artifact.role, attachmentID: imported.id, status: "imported" };
+    repository,
+  });
+  return {
+    role: artifact.role,
+    attachmentID: imported.attachment.id,
+    status: "imported",
+  };
 }
 
 function figureManagedArtifact(
@@ -241,11 +337,13 @@ function figureManagedArtifact(
   runID: string,
   artifact: ArtifactImport,
   actualHash: string,
+  relativePath?: string,
 ): ManagedArtifact {
   return {
     attachmentKey: attachment.key,
     role: artifact.role,
     sha256: actualHash,
+    relativePath,
     runID,
     figureID: artifact.figure!.id,
   };
@@ -257,11 +355,12 @@ async function createFigureArtifact(
   artifact: ArtifactImport,
   actualHash: string,
   children: Zotero.Item[],
+  repository: ArtifactImportRepository,
 ): Promise<FigureArtifact> {
   const metadata = artifact.figure!;
   const pdf = metadata.sourcePdfAttachmentKey
     ? children.find((child) => child.key === metadata.sourcePdfAttachmentKey)
-    : (await resolvePrimaryPdf(parent, children))?.attachment;
+    : (await resolvePrimaryPdf(parent, children, repository))?.attachment;
   return {
     id: metadata.id,
     parentItemKey: parent.key,
@@ -282,12 +381,17 @@ function replaceFigure(
   return [...figures.filter((entry) => entry.id !== figure.id), figure];
 }
 
-async function saveParentManifests(
-  parent: Zotero.Item,
-  artifacts: ManagedArtifact[],
-  figures?: FigureArtifact[],
-): Promise<void> {
-  await repository.saveManifests(parent, artifacts, figures);
+async function saveParentManifests(options: {
+  parent: Zotero.Item;
+  artifacts: ManagedArtifact[];
+  repository: ArtifactImportRepository;
+  figures?: FigureArtifact[];
+}): Promise<void> {
+  await options.repository.saveManifests(
+    options.parent,
+    options.artifacts,
+    options.figures,
+  );
 }
 
 export function validateRequest(data: unknown): ArtifactImportRequest {

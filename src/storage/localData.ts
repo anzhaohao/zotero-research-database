@@ -6,6 +6,14 @@ import {
   type ResearchDataWriteOptions,
 } from "./syncedData";
 import { parseWorkspacePayload } from "../core/codec";
+import {
+  DATA_ROOT_DATABASE,
+  dataRootPath,
+  getDataRoot,
+  getLegacyDataRoot,
+  hasConfiguredDataRoot,
+  initializeDataRoot,
+} from "./dataRoot";
 
 export interface LocalPayload {
   schemaVersion: 1;
@@ -19,15 +27,18 @@ const MEMORY_FALLBACK: LocalPayload = {
   items: {},
 };
 
-// Several UI services construct their own repository. Share one in-process
-// cache and write queue so one edit cannot overwrite another service's newer
-// value with a stale file snapshot.
+// All production repositories share a plugin scope. Retain a shared store
+// cache and write queue as well for explicitly constructed adapters, so an
+// older file snapshot cannot overwrite another service's newer value.
 let sharedPayload: LocalPayload = emptyPayload();
 let sharedLoaded = false;
 let sharedLoading: Promise<void> | undefined;
 let sharedWriteQueue: Promise<void> = Promise.resolve();
 export interface LocalResearchDataChange {
   scope: ResearchDataChangeScope;
+  /** Present only for item writes; absence means workspace/global change. */
+  libraryID?: number;
+  itemKey?: string;
 }
 
 const changeListeners = new Set<(change: LocalResearchDataChange) => void>();
@@ -35,8 +46,8 @@ const changeListeners = new Set<(change: LocalResearchDataChange) => void>();
 interface LocalIOUtils {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<Uint8Array>;
-  write?(path: string, bytes: Uint8Array): Promise<void>;
-  writeUTF8?(path: string, content: string): Promise<void>;
+  write?(path: string, bytes: Uint8Array): Promise<number>;
+  writeUTF8?(path: string, content: string): Promise<number>;
   move?(
     sourcePath: string,
     destinationPath: string,
@@ -44,7 +55,7 @@ interface LocalIOUtils {
   ): Promise<void>;
   makeDirectory?(
     path: string,
-    options?: { ignoreExisting?: boolean },
+    options?: { createAncestors?: boolean; ignoreExisting?: boolean },
   ): Promise<void>;
   remove?(
     path: string,
@@ -56,6 +67,7 @@ interface LocalPathUtils {
   profileDir?: string;
   tempDir?: string;
   join?: (...parts: string[]) => string;
+  normalize?: (path: string) => string;
 }
 
 export function onLocalResearchDataChanged(
@@ -65,8 +77,7 @@ export function onLocalResearchDataChanged(
   return () => changeListeners.delete(listener);
 }
 
-function emitChange(scope: ResearchDataChangeScope): void {
-  const change: LocalResearchDataChange = { scope };
+function emitChange(change: LocalResearchDataChange): void {
   for (const listener of changeListeners) {
     try {
       listener(change);
@@ -85,6 +96,7 @@ function clone<T>(value: T): T {
 }
 
 function localPath(): string | undefined {
+  if (hasConfiguredDataRoot()) return dataRootPath(DATA_ROOT_DATABASE);
   const pathUtils = runtimePathUtils();
   if (!pathUtils?.profileDir || typeof pathUtils.join !== "function")
     return undefined;
@@ -107,11 +119,12 @@ function localBackupPath(): string | undefined {
  */
 function runtimeIOUtils(): LocalIOUtils | undefined {
   try {
-    if (typeof IOUtils !== "undefined") return IOUtils as LocalIOUtils;
+    if (typeof IOUtils !== "undefined")
+      return IOUtils as unknown as LocalIOUtils;
   } catch {
     // The lexical global is not available in this runtime.
   }
-  return (globalThis as any).IOUtils as LocalIOUtils | undefined;
+  return (globalThis as { IOUtils?: LocalIOUtils }).IOUtils;
 }
 
 function runtimePathUtils(): LocalPathUtils | undefined {
@@ -120,11 +133,19 @@ function runtimePathUtils(): LocalPathUtils | undefined {
   } catch {
     // The lexical global is not available in this runtime.
   }
-  return (globalThis as any).PathUtils as LocalPathUtils | undefined;
+  return (globalThis as { PathUtils?: LocalPathUtils }).PathUtils;
 }
 
 function emptyPayload(): LocalPayload {
   return { schemaVersion: 1, items: {} };
+}
+
+/** Reset only when a plugin scope is disposed/recreated, never on root save. */
+export function resetLocalDataScope(): void {
+  sharedPayload = emptyPayload();
+  sharedLoaded = false;
+  sharedLoading = undefined;
+  sharedWriteQueue = Promise.resolve();
 }
 
 export function parseLocalPayload(value: unknown): LocalPayload {
@@ -133,7 +154,11 @@ export function parseLocalPayload(value: unknown): LocalPayload {
     !raw ||
     raw.schemaVersion !== 1 ||
     !raw.items ||
-    typeof raw.items !== "object"
+    typeof raw.items !== "object" ||
+    Array.isArray(raw.items) ||
+    (raw.workspaceLibraryID !== undefined &&
+      (!Number.isInteger(raw.workspaceLibraryID) ||
+        raw.workspaceLibraryID <= 0))
   )
     throw new Error("本机研究数据库文件格式无效；未覆盖原文件");
 
@@ -172,7 +197,7 @@ export async function replaceLocalPayload(
   const previous = sharedPayload;
   sharedPayload = clone(next);
   try {
-    await persistSharedPayload("all", options);
+    await persistSharedPayload({ scope: "all" }, options);
   } catch (error) {
     sharedPayload = previous;
     throw error;
@@ -227,7 +252,11 @@ export class ResearchLocalStore implements ResearchDataStore {
     });
     sharedPayload.items[itemID(normalized.libraryID, normalized.itemKey)] =
       clone(normalized);
-    await this.persist(options?.changeScope);
+    await this.persist({
+      scope: options?.changeScope || "all",
+      libraryID: normalized.libraryID,
+      itemKey: normalized.itemKey,
+    });
   }
 
   private async loadFromDisk(): Promise<void> {
@@ -238,33 +267,98 @@ export class ResearchLocalStore implements ResearchDataStore {
       sharedLoaded = true;
       return;
     }
-    if (!(await io.exists(path))) {
-      sharedPayload = emptyPayload();
-      sharedLoaded = true;
-      return;
+    await initializeDataRoot();
+    let loaded = await loadValidatedPayload(path, io);
+    let migrated = false;
+    if (!loaded && hasConfiguredDataRoot()) {
+      const paths = runtimePathUtils();
+      const root = getDataRoot();
+      const legacy = getLegacyDataRoot();
+      const normalize = paths?.normalize || ((value: string) => value);
+      // A user can explicitly select the existing default directory. Only
+      // that same directory's old filename is eligible for migration; an
+      // unrelated selected library never inherits profile data.
+      if (
+        root &&
+        legacy &&
+        normalize(root) === normalize(legacy) &&
+        paths?.join
+      ) {
+        loaded = await loadValidatedPayload(
+          paths.join(root, "research-data-v1.json"),
+          io,
+        );
+        migrated = Boolean(loaded);
+      }
     }
-    let raw: string;
-    try {
-      raw = new TextDecoder().decode(await io.read(path));
-      sharedPayload = parseLocalPayload(JSON.parse(raw));
-    } catch (error) {
-      throw new Error(
-        "本机研究数据库文件无法读取；为保护数据，插件没有覆盖或删除原文件",
-        { cause: error },
-      );
-    }
+    if (loaded?.recovered || migrated)
+      await writeValidatedPayload(path, loaded!.payload, io);
+    sharedPayload = loaded?.payload || emptyPayload();
     sharedLoaded = true;
   }
 
   private async persist(
-    changeScope: ResearchDataChangeScope = "all",
+    change: LocalResearchDataChange = { scope: "all" },
   ): Promise<void> {
-    await persistSharedPayload(changeScope);
+    await persistSharedPayload(change);
+  }
+}
+
+async function loadValidatedPayload(
+  path: string,
+  io: LocalIOUtils,
+): Promise<{ payload: LocalPayload; recovered: boolean } | undefined> {
+  let failure: unknown;
+  let found = false;
+  for (const candidate of [path, `${path}.bak`]) {
+    if (!(await io.exists(candidate))) continue;
+    found = true;
+    try {
+      const payload = parseLocalPayload(
+        JSON.parse(new TextDecoder().decode(await io.read(candidate))),
+      );
+      return { payload, recovered: candidate !== path };
+    } catch (error) {
+      failure = error;
+    }
+  }
+  if (!found) return undefined;
+  throw new Error(
+    "本机研究数据库及恢复副本均无法读取；为保护数据，插件没有覆盖或删除原文件",
+    { cause: failure },
+  );
+}
+
+async function writeValidatedPayload(
+  path: string,
+  payload: LocalPayload,
+  io: LocalIOUtils,
+): Promise<void> {
+  const directory = getDataRoot();
+  if (!directory || !io.makeDirectory || !io.writeUTF8)
+    throw new Error("当前 Zotero 无法安全恢复研究数据库文件");
+  await io.makeDirectory(directory, {
+    createAncestors: true,
+    ignoreExisting: true,
+  });
+  const temporaryPath = `${path}.${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.tmp`;
+  const content = JSON.stringify(parseLocalPayload(payload), null, 2);
+  try {
+    await io.writeUTF8(temporaryPath, content);
+    parseLocalPayload(
+      JSON.parse(new TextDecoder().decode(await io.read(temporaryPath))),
+    );
+    if (io.move) await io.move(temporaryPath, path, { noOverwrite: false });
+    else await io.writeUTF8(path, content);
+  } finally {
+    await io.remove?.(temporaryPath, { ignoreAbsent: true });
   }
 }
 
 async function persistSharedPayload(
-  changeScope: ResearchDataChangeScope = "all",
+  change: LocalResearchDataChange = { scope: "all" },
   options: { backupCurrent?: boolean } = {},
 ): Promise<void> {
   const path = localPath();
@@ -274,18 +368,14 @@ async function persistSharedPayload(
     typeof io?.writeUTF8 !== "function" ||
     typeof io.makeDirectory !== "function"
   ) {
-    emitChange(changeScope);
+    emitChange(change);
     return;
   }
-  const pathUtils = runtimePathUtils();
-  if (!pathUtils?.profileDir || typeof pathUtils.join !== "function") {
-    emitChange(changeScope);
+  const directory = getDataRoot();
+  if (!directory) {
+    emitChange(change);
     return;
   }
-  const directory = pathUtils.join(
-    pathUtils.profileDir,
-    "zotero-research-database",
-  );
   const content = JSON.stringify(sharedPayload, null, 2);
   const temporaryPath = `${path}.${Date.now()}-${Math.random()
     .toString(36)
@@ -296,11 +386,16 @@ async function persistSharedPayload(
   sharedWriteQueue = sharedWriteQueue
     .catch(() => undefined)
     .then(async () => {
-      await io.makeDirectory!(directory, { ignoreExisting: true });
+      await io.makeDirectory!(directory, {
+        createAncestors: true,
+        ignoreExisting: true,
+      });
       if (options.backupCurrent && (await io.exists(path))) {
         const backupPath = localBackupPath();
         if (!backupPath) throw new Error("无法确定本机研究数据库备份路径");
         const bytes = await io.read(path);
+        // Never replace a known-good recovery copy with an invalid primary.
+        parseLocalPayload(JSON.parse(new TextDecoder().decode(bytes)));
         if (typeof io.write === "function") await io.write(backupPath, bytes);
         else if (typeof io.writeUTF8 === "function")
           await io.writeUTF8(backupPath, new TextDecoder().decode(bytes));
@@ -321,5 +416,5 @@ async function persistSharedPayload(
       }
     });
   await sharedWriteQueue;
-  emitChange(changeScope);
+  emitChange(change);
 }

@@ -55,9 +55,7 @@ export function getCitationText(
   style: CitationStyle,
 ): string {
   if ((Zotero.Styles as any)?.initialized?.() === false) return "";
-  const revision = String(
-    (item as any).version || (item as any).dateModified || "",
-  );
+  const revision = String(item.version || item.dateModified || "");
   const key = `${item.libraryID}:${item.key}:${revision}:${style}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;

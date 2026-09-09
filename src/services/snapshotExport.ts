@@ -6,14 +6,21 @@ import {
 import type { ComparisonSnapshot, FieldDefinition } from "../domain/types";
 import { setCurrentArtifact } from "./artifactMetadata";
 import { sha256Text } from "./contentSource";
-import { ResearchRepository } from "../storage/repository";
+import type { ResearchRepository } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
+import { createManagedAttachment } from "./artifactStorage";
 
-const repository = new ResearchRepository();
+export type SnapshotExportRepository = Pick<
+  ResearchRepository,
+  "loadArtifacts" | "saveArtifacts"
+>;
 
 export async function exportSnapshotAttachments(
   workspaceItem: Zotero.Item,
   snapshot: ComparisonSnapshot,
   fields: FieldDefinition[],
+  repository: SnapshotExportRepository = getResearchRepository(),
+  createAttachment = createManagedAttachment,
 ): Promise<number[]> {
   const safeName = sanitize(snapshot.name);
   const directory = PathUtils.join(
@@ -32,17 +39,23 @@ export async function exportSnapshotAttachments(
     for (const file of files) {
       const path = PathUtils.join(directory, `${safeName}.${file.extension}`);
       await IOUtils.writeUTF8(path, file.content);
-      const attachment = await Zotero.Attachments.importFromFile({
-        file: path,
-        parentItemID: workspaceItem.id,
-        title: `${snapshot.name}.${file.extension}`,
-      } as any);
+      const managed = await createAttachment(
+        workspaceItem,
+        path,
+        `${snapshot.name}.${file.extension}`,
+        {
+          role: "snapshot",
+          snapshotID: snapshot.id,
+          format: file.extension as "md" | "html" | "csv",
+        },
+      );
       artifacts = setCurrentArtifact(
         artifacts,
         {
-          attachmentKey: attachment.key,
+          attachmentKey: managed.attachment.key,
           role: "snapshot",
-          sha256: await sha256Text(file.content),
+          sha256: managed.sha256 || (await sha256Text(file.content)),
+          relativePath: managed.relativePath,
           snapshotID: snapshot.id,
           format: file.extension as "md" | "html" | "csv",
         },
@@ -51,7 +64,7 @@ export async function exportSnapshotAttachments(
           entry.snapshotID === snapshot.id &&
           entry.format === file.extension,
       );
-      attachmentIDs.push(attachment.id);
+      attachmentIDs.push(managed.attachment.id);
     }
     await repository.saveArtifacts(workspaceItem, artifacts);
   } finally {

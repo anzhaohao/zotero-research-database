@@ -6,12 +6,7 @@ Zotero Research Database 为 Zotero 9 增加同一文献管理区域内的数据
 
 # 页面展示
 
-
 https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
-
-
-
-
 
 # 当前能力
 
@@ -120,7 +115,7 @@ npm run build
 D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi
 ```
 
-安装后应在附加组件管理器中看到版本 `0.3.30`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
+安装后应在附加组件管理器中看到版本 `0.3.35`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
 
 # 本地导入接口
 

@@ -1,20 +1,30 @@
 import { config } from "../package.json";
 import { createZToolkit } from "./utils/ztoolkit";
 import { MainViewController } from "./ui/viewController";
-import {
-  registerArtifactEndpoint,
-  unregisterArtifactEndpoint,
-} from "./services/artifactEndpoint";
+import { unregisterArtifactEndpoint } from "./services/artifactEndpoint";
 import { ItemPaneProperties } from "./ui/itemPaneProperties";
 import { PreferencesController } from "./ui/preferencesController";
 import { migrateAgentPreferences } from "./services/agentSettings";
 import { migrateMinerUPreferences } from "./services/mineru";
-import { migrateLegacyInternalTags } from "./services/artifactMetadata";
-import { ResearchRepository } from "./storage/repository";
+import { createResearchServices } from "./services/researchServices";
+import {
+  getResearchRepository,
+  resetResearchRepositoryScope,
+} from "./storage/repositoryScope";
+import { clearPdfThumbnailCache } from "./services/pdfThumbnail";
 import { ensureCitationStylesReady } from "./services/citation";
+import {
+  registerArtifactStorageNotifier,
+  unregisterArtifactStorageNotifier,
+} from "./services/artifactStorage";
+import { initializeDataRoot, resetDataRootScope } from "./storage/dataRoot";
+import {
+  initializePortableSettings,
+  resetPortableSettingsScope,
+} from "./storage/settingsStore";
 
 const itemPaneProperties = new ItemPaneProperties();
-const migrationRepository = new ResearchRepository();
+let artifactStorageNotifierID: string | undefined;
 
 /**
  * Register the plugin preferences pane so "Zotero Research Database" appears
@@ -41,6 +51,14 @@ async function onStartup() {
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
+  try {
+    await initializeDataRoot();
+    await initializePortableSettings();
+  } catch (error) {
+    Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+  }
+  const repository = getResearchRepository();
+  const services = createResearchServices(repository);
   await registerPreferencePane();
   migrateAgentPreferences();
   migrateMinerUPreferences();
@@ -51,20 +69,21 @@ async function onStartup() {
     Zotero.logError(error instanceof Error ? error : new Error(String(error)));
   }
   try {
-    await migrationRepository.migrateLegacyStorage();
+    await repository.migrateLegacyStorage();
   } catch (error) {
     // A failed item remains fully recoverable in its old Extra lines. Continue
     // startup and retry the same migration next time.
     Zotero.logError(error instanceof Error ? error : new Error(String(error)));
   }
   try {
-    await migrateLegacyInternalTags();
+    await services.migrateLegacyInternalTags();
   } catch (error) {
     // Never block Zotero startup. The migration preference remains unset, so
     // the exact same safe migration is retried on the next plugin startup.
     Zotero.logError(error instanceof Error ? error : new Error(String(error)));
   }
-  registerArtifactEndpoint();
+  services.registerArtifactEndpoint();
+  artifactStorageNotifierID = await registerArtifactStorageNotifier();
   await itemPaneProperties.register();
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -99,10 +118,16 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 
 function onShutdown(): void {
   unregisterArtifactEndpoint();
+  unregisterArtifactStorageNotifier(artifactStorageNotifierID);
+  artifactStorageNotifierID = undefined;
   itemPaneProperties.unregister();
   for (const controller of addon.data.controllers.values())
     controller.destroy();
   addon.data.controllers.clear();
+  clearPdfThumbnailCache();
+  resetResearchRepositoryScope();
+  resetDataRootScope();
+  resetPortableSettingsScope();
   ztoolkit.unregisterAll();
   addon.data.alive = false;
   // @ts-expect-error Plugin instance is intentionally removed on shutdown.

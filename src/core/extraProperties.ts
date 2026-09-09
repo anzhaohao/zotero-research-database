@@ -427,6 +427,9 @@ function validateManagedArtifact(value: unknown): ManagedArtifact {
     !validRoles.includes(String(artifact.role)) ||
     (artifact.sha256 !== undefined &&
       !/^[a-f0-9]{64}$/i.test(artifact.sha256)) ||
+    (artifact.relativePath !== undefined &&
+      (typeof artifact.relativePath !== "string" ||
+        !/^[A-Z0-9]{8}\/[^\\/]+$/i.test(artifact.relativePath))) ||
     (artifact.runID !== undefined && typeof artifact.runID !== "string") ||
     (artifact.figureID !== undefined &&
       typeof artifact.figureID !== "string") ||
@@ -442,6 +445,7 @@ function validateManagedArtifact(value: unknown): ManagedArtifact {
     attachmentKey: artifact.attachmentKey.toUpperCase(),
     role: artifact.role as ManagedArtifact["role"],
     sha256: artifact.sha256?.toLowerCase(),
+    relativePath: artifact.relativePath,
     runID: artifact.runID,
     figureID: artifact.figureID,
     snapshotID: artifact.snapshotID,

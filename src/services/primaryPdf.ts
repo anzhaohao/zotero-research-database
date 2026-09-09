@@ -1,6 +1,10 @@
-import { ResearchRepository } from "../storage/repository";
+import type { ResearchRepository } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
 
-const repository = new ResearchRepository();
+export type PrimaryPdfRepository = Pick<
+  ResearchRepository,
+  "loadPrimaryPdfKey" | "savePrimaryPdfKey"
+>;
 
 export interface PrimaryPdfResolution {
   attachment: Zotero.Item;
@@ -19,8 +23,14 @@ export async function listPdfAttachments(
 export async function resolvePrimaryPdf(
   item: Zotero.Item,
   suppliedAttachments?: Zotero.Item[],
+  repository: PrimaryPdfRepository = getResearchRepository(),
 ): Promise<PrimaryPdfResolution | undefined> {
-  const attachments = suppliedAttachments || (await listPdfAttachments(item));
+  const attachments = suppliedAttachments
+    ? suppliedAttachments.filter(
+        (attachment) =>
+          attachment.isAttachment() && attachment.isPDFAttachment(),
+      )
+    : await listPdfAttachments(item);
   if (!attachments.length) return undefined;
 
   const explicitKey = await repository.loadPrimaryPdfKey(item);
@@ -37,9 +47,9 @@ export async function resolvePrimaryPdf(
   );
   if (namedPdf) return { attachment: namedPdf, source: "named-pdf" };
 
-  const best = await (item as any).getBestAttachment?.();
+  const best = await item.getBestAttachment?.();
   if (best && attachments.some((attachment) => attachment.id === best.id)) {
-    return { attachment: best as Zotero.Item, source: "best-attachment" };
+    return { attachment: best, source: "best-attachment" };
   }
 
   return { attachment: attachments[0], source: "first-pdf" };
@@ -48,6 +58,7 @@ export async function resolvePrimaryPdf(
 export async function setPrimaryPdf(
   item: Zotero.Item,
   attachmentKey?: string,
+  repository: PrimaryPdfRepository = getResearchRepository(),
 ): Promise<void> {
   if (attachmentKey) {
     const attachments = await listPdfAttachments(item);

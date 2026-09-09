@@ -26,7 +26,8 @@ export type FigureKind = "figure" | "table" | "formula";
 export interface FieldExtractionDefinition {
   enabled: boolean;
   instruction: string;
-  outputLanguage: string;
+  /** @deprecated Keep only for reading older workspaces; prompts define language now. */
+  outputLanguage?: string;
   templateVersion: number;
 }
 
@@ -95,7 +96,7 @@ export interface ViewLayout {
   rowHeights: Record<string, number>;
   cardWidth: number;
   cardDensity: "compact" | "comfortable";
-  /** Columns displayed by this view. Missing values are migrated to all columns. */
+  /** The sole column-visibility list; an empty list means show no columns. */
   visibleColumnIDs: string[];
   /** Per-view aliases. These never change the underlying Zotero field. */
   columnLabels: Record<string, string>;
@@ -104,17 +105,12 @@ export interface ViewLayout {
   /** CSL bibliography style used by the combined basic-information column. */
   citationStyle: CitationStyle;
   pinnedColumnIDs: string[];
-  /** Optional per-view override; absent means use the local global settings. */
-  figureKinds?: FigureKind[];
 }
 
 export interface SavedView {
   id: string;
   name: string;
   mode: "table";
-  visibleFieldIDs: string[];
-  /** Kept on the view as well as layout for easy future migrations. */
-  visibleColumnIDs?: string[];
   /** Optional per-view override; absent means use the local global settings. */
   figureKinds?: FigureKind[];
   sortBy?: { fieldID: string; direction: "asc" | "desc" };
@@ -155,7 +151,7 @@ export interface ComparisonSnapshot {
 }
 
 export interface WorkspaceState {
-  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
   fields: FieldDefinition[];
   views: SavedView[];
   comparisons: ComparisonDefinition[];
@@ -190,6 +186,8 @@ export interface ManagedArtifact {
   attachmentKey: string;
   role: ArtifactRole | "snapshot";
   sha256?: string;
+  /** Relative path inside <artifactRoot>/<itemKey>/ for linked artifacts. */
+  relativePath?: string;
   runID?: string;
   figureID?: string;
   snapshotID?: string;

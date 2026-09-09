@@ -1,7 +1,11 @@
 pref("enable", true);
 pref("artifactImportToken", "");
 pref("artifactMetadataMigrationVersion", 0);
+pref("artifactStorageRoot", "");
+pref("dataRoot", "");
+pref("artifactStorageMigrationVersion", 0);
 pref("lastViewMode", "default");
+pref("viewTogglePosition", "right");
 pref("defaultRowHeight", 270);
 pref("defaultView", "table");
 pref("hideMinerUArtifactsInNativeList", true);

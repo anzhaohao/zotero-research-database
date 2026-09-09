@@ -37,15 +37,17 @@ describe("native MinerU artifact visibility", function () {
       refreshAndMaintainSelection: originalRefresh,
       tree: { invalidate() {} },
     };
+    const artifacts = [
+      {
+        attachmentKey: "FIGURE01",
+        role: "figure",
+        sha256: "hash",
+      },
+      { attachmentKey: "USERPDF1", role: "translation" },
+    ];
     const repository = {
-      loadArtifacts: async () => [
-        {
-          attachmentKey: "FIGURE01",
-          role: "figure",
-          sha256: "hash",
-        },
-        { attachmentKey: "USERPDF1", role: "translation" },
-      ],
+      loadArtifacts: async () => artifacts,
+      loadAllArtifacts: async () => artifacts,
     } as unknown as ResearchRepository;
     const controller = new NativeArtifactVisibilityController(tree, repository);
 

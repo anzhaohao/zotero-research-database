@@ -10,26 +10,24 @@ import type {
 } from "../domain/types";
 import { parseRecordPayload, parseWorkspacePayload } from "../core/codec";
 
-interface SyncedSettingsAPI {
-  get(libraryID: number, setting: string): unknown;
-  clear(
-    libraryID: number,
-    setting: string,
-    options?: { skipDeleteLog?: boolean },
-  ): Promise<unknown>;
-}
-
-function api(): SyncedSettingsAPI {
-  const syncedSettings = (Zotero as unknown as { SyncedSettings?: unknown })
-    .SyncedSettings as SyncedSettingsAPI | undefined;
+export function getMigrationSyncedSettings():
+  | _ZoteroTypes.ResearchMigrationSyncedSettings
+  | undefined {
+  const syncedSettings = Zotero.SyncedSettings;
   if (
     !syncedSettings ||
     typeof syncedSettings.get !== "function" ||
     typeof syncedSettings.clear !== "function"
   ) {
-    throw new Error("Zotero 同步设置运行时不可用");
+    return undefined;
   }
   return syncedSettings;
+}
+
+function api(): _ZoteroTypes.ResearchMigrationSyncedSettings {
+  const settings = getMigrationSyncedSettings();
+  if (!settings) throw new Error("Zotero 同步设置运行时不可用");
+  return settings;
 }
 
 export function createItemInternalState(
@@ -133,6 +131,8 @@ function parseArtifact(value: unknown): ManagedArtifact {
     !validRoles.includes(String(artifact.role)) ||
     (artifact.sha256 !== undefined &&
       !/^[a-f0-9]{64}$/i.test(artifact.sha256)) ||
+    (artifact.relativePath !== undefined &&
+      typeof artifact.relativePath !== "string") ||
     (artifact.runID !== undefined && typeof artifact.runID !== "string") ||
     (artifact.figureID !== undefined &&
       typeof artifact.figureID !== "string") ||
@@ -148,6 +148,7 @@ function parseArtifact(value: unknown): ManagedArtifact {
     attachmentKey: artifact.attachmentKey.toUpperCase(),
     role: artifact.role as ManagedArtifact["role"],
     sha256: artifact.sha256?.toLowerCase(),
+    ...(artifact.relativePath ? { relativePath: artifact.relativePath } : {}),
     runID: artifact.runID,
     figureID: artifact.figureID,
     snapshotID: artifact.snapshotID,

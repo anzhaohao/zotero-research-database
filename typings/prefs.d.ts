@@ -10,7 +10,11 @@ declare namespace _ZoteroTypes {
       "enable": boolean;
       "artifactImportToken": string;
       "artifactMetadataMigrationVersion": number;
+      "artifactStorageRoot": string;
+      "dataRoot": string;
+      "artifactStorageMigrationVersion": number;
       "lastViewMode": string;
+      "viewTogglePosition": string;
       "defaultRowHeight": number;
       "defaultView": string;
       "hideMinerUArtifactsInNativeList": boolean;

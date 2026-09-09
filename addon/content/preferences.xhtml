@@ -70,7 +70,7 @@
       role="tab"
       aria-selected="false"
       data-pref-tab="backup"
-      >数据备份</html:button
+      >数据目录</html:button
     >
   </html:div>
 
@@ -104,6 +104,13 @@
           ><html:option value="filtered">当前筛选结果</html:option
           ><html:option value="selected">当前选中文献</html:option
           ><html:option value="all">当前视图全部</html:option></html:select
+        ></html:label
+      >
+      <html:label
+        >视图切换按钮位置
+        <html:select data-pref="viewTogglePosition"
+          ><html:option value="right">工具栏最右</html:option
+          ><html:option value="left">工具栏最左</html:option></html:select
         ></html:label
       >
     </html:div>
@@ -141,11 +148,10 @@
 
   <html:div class="zrdb-pref-panel" data-pref-panel="fields" hidden="true">
     <html:div class="zrdb-pref-section">
-      <html:h3>列属性与字段</html:h3>
+      <html:h3>字段定义</html:h3>
       <html:p
-        >下面的自定义字段、说明和提示词保存在本机研究数据库中。原生元数据列只读；归档字段保留历史值，可以恢复。</html:p
+        >在此管理自定义字段、说明和提取提示词；语言与输出格式直接写入提示词。归档字段保留历史值，可以恢复。列的显示、顺序和固定位置在表格的“当前视图列布局”中调整。</html:p
       >
-      <html:div id="zrdb-native-columns" class="zrdb-pref-columns"></html:div>
       <html:div id="zrdb-fields-list" class="zrdb-pref-fields"></html:div>
       <html:div class="zrdb-pref-inline-actions">
         <html:button type="button" id="zrdb-add-field"
@@ -155,9 +161,6 @@
           >保存字段方案</html:button
         >
       </html:div>
-      <html:button type="button" id="zrdb-reset-layout"
-        >恢复默认表格布局</html:button
-      >
     </html:div>
   </html:div>
 
@@ -184,6 +187,9 @@
       <html:label
         ><html:input type="checkbox" data-pref="zoteroFigureShowFormulas" />
         显示公式</html:label
+      >
+      <html:p
+        >这些选项设置图表列的默认显示内容；当前视图可在表格菜单中单独调整。已有公式会自动渲染，无需重新识别。</html:p
       >
       <html:label
         ><html:input type="checkbox" data-pref="mineruFigureFallback" /> Zotero
@@ -246,6 +252,30 @@
         >插件不会保存云端 API Key，也不会经过 Shell 拼接命令。连接测试和结构化
         JSON 校验由外部适配器完成。</html:p
       >
+      <html:div class="zrdb-pref-callout">
+        <html:h4>精读工作流本地接口</html:h4>
+        <html:p
+          >外部精读工作流向 Zotero
+          回传图表、表格和公式时，需要使用下面的令牌。</html:p
+        >
+        <html:input
+          id="zrdb-artifact-import-token"
+          type="text"
+          readonly="true"
+          aria-label="精读工作流接口令牌"
+        />
+        <html:div class="zrdb-pref-inline-actions">
+          <html:button type="button" id="zrdb-artifact-token-copy"
+            >复制令牌</html:button
+          >
+          <html:button type="button" id="zrdb-artifact-token-rotate"
+            >轮换令牌</html:button
+          >
+        </html:div>
+        <html:p class="zrdb-pref-warning"
+          >轮换后，使用旧令牌的工作流需要更新配置。</html:p
+        >
+      </html:div>
       <html:div class="zrdb-pref-inline-actions">
         <html:button type="button" id="zrdb-agent-test">连接测试</html:button>
         <html:button type="button" id="zrdb-agent-json-test"
@@ -370,7 +400,7 @@
       /></html:label>
       <html:label data-mineru-modes="official-api self-hosted"
         ><html:input type="checkbox" data-pref="mineruEnableFormula" />
-        识别公式</html:label
+        转换时识别公式（Markdown）</html:label
       >
       <html:label data-mineru-modes="official-api self-hosted"
         ><html:input type="checkbox" data-pref="mineruEnableTable" />
@@ -391,20 +421,67 @@
 
   <html:div class="zrdb-pref-panel" data-pref-panel="backup" hidden="true">
     <html:div class="zrdb-pref-section">
-      <html:h3>数据备份</html:h3>
+      <html:h3>研究数据库目录</html:h3>
       <html:p
-        >导出本机研究属性、锁定、图表记录与本机设置，方便迁移到另一台电脑。备份不包含
-        artifactImportToken 等敏感凭据；导入时按 itemKey → DOI →
-        标题严格匹配，存在歧义或冲突的条目不会导入。</html:p
+        >设置生效后，研究数据、字段方案、视图和非敏感配置保存在这个目录。备份前请关闭
+        Zotero 并复制数据目录及尚未迁入的产物目录；文献和主 PDF 仍由 Zotero
+        管理。</html:p
       >
+      <html:label
+        >研究数据库目录
+        <html:input
+          type="text"
+          data-pref="dataRoot"
+          placeholder="例如：D:\\Zotero Research Database"
+        />
+      </html:label>
       <html:div class="zrdb-pref-inline-actions">
-        <html:button type="button" id="zrdb-backup-export"
-          >导出备份</html:button
+        <html:button type="button" id="zrdb-data-root-pick"
+          >选择目录</html:button
         >
-        <html:button type="button" id="zrdb-backup-import"
-          >导入备份</html:button
+        <html:button type="button" id="zrdb-data-root-open"
+          >打开目录</html:button
         >
       </html:div>
+      <html:p class="zrdb-pref-warning"
+        >选择目录后需点击“保存本机设置”，重启 Zotero
+        才会打开目标库。空目录会新建空库，
+        不会自动搬迁当前库；“打开目录”显示当前生效的目录。迁移当前库前请先关闭
+        Zotero 并复制数据文件，保留原目录。</html:p
+      >
+      <html:h4>研究产物存储</html:h4>
+      <html:p
+        >新产物优先存放在研究数据库目录的 artifacts
+        子目录；已有产物可使用下方工具迁入。
+        未设置研究数据库目录时继续使用旧产物路径。主 PDF 始终由 Zotero
+        管理。</html:p
+      >
+      <html:label
+        >研究产物根目录
+        <html:input
+          type="text"
+          data-pref="artifactStorageRoot"
+          placeholder="例如：D:\\Zotero Research Artifacts"
+        />
+      </html:label>
+      <html:div class="zrdb-pref-inline-actions">
+        <html:button type="button" id="zrdb-artifact-root-pick"
+          >选择目录</html:button
+        >
+        <html:button type="button" id="zrdb-artifact-root-open"
+          >打开产物目录</html:button
+        >
+        <html:button type="button" id="zrdb-artifact-migrate"
+          >迁移已有产物</html:button
+        >
+        <html:button type="button" id="zrdb-artifact-scan"
+          >检测断链</html:button
+        >
+      </html:div>
+      <html:p class="zrdb-pref-warning"
+        >迁移只处理插件 manifest 中登记的产物，并在 SHA-256
+        校验成功后更新关联；目录中的其它用户文件不会被删除。</html:p
+      >
     </html:div>
   </html:div>
 

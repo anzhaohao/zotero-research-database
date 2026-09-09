@@ -1,11 +1,16 @@
 import type { SourceText } from "../domain/types";
 import { resolvePrimaryPdf } from "./primaryPdf";
-import { ResearchRepository } from "../storage/repository";
+import type { ResearchRepository } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
 
-const repository = new ResearchRepository();
+export type ContentSourceRepository = Pick<
+  ResearchRepository,
+  "loadArtifacts" | "loadPrimaryPdfKey" | "savePrimaryPdfKey"
+>;
 
 export async function resolveSourceText(
   item: Zotero.Item,
+  repository: ContentSourceRepository = getResearchRepository(),
 ): Promise<SourceText> {
   const attachments = await Zotero.Items.getAsync(item.getAttachments());
   const activeMinerUKeys = new Set(
@@ -18,7 +23,8 @@ export async function resolveSourceText(
   const mineru = attachments
     .filter((attachment) => isMinerUAttachment(attachment, activeMinerUKeys))
     .sort((a, b) => b.dateModified.localeCompare(a.dateModified))[0];
-  const pdf = (await resolvePrimaryPdf(item, attachments))?.attachment;
+  const pdf = (await resolvePrimaryPdf(item, attachments, repository))
+    ?.attachment;
   const pdfPathValue = pdf ? await pdf.getFilePathAsync() : undefined;
   const pdfPath = typeof pdfPathValue === "string" ? pdfPathValue : undefined;
   if (mineru) {
@@ -38,7 +44,7 @@ export async function resolveSourceText(
   }
 
   if (!pdf) throw new Error("条目下没有 MinerU Markdown 或主 PDF 附件");
-  const fulltext = Zotero.Fulltext as any;
+  const fulltext = Zotero.Fulltext;
   try {
     await fulltext.indexItems([pdf.id], { complete: true, ignoreErrors: true });
   } catch (error) {

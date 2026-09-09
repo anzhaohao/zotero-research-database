@@ -1,4 +1,9 @@
 import { config } from "../../package.json";
+import {
+  getPortableSetting,
+  isPortableSettingsReady,
+  setPortableSetting,
+} from "../storage/settingsStore";
 
 type PluginPrefsMap = _ZoteroTypes.Prefs["PluginPrefsMap"];
 
@@ -10,6 +15,10 @@ const PREFS_PREFIX = config.prefsPrefix;
  * @param key
  */
 export function getPref<K extends keyof PluginPrefsMap>(key: K) {
+  if (isPortableSettingsReady()) {
+    const portable = getPortableSetting(String(key));
+    if (portable !== undefined) return portable as PluginPrefsMap[K];
+  }
   return Zotero.Prefs.get(`${PREFS_PREFIX}.${key}`, true) as PluginPrefsMap[K];
 }
 
@@ -23,7 +32,9 @@ export function setPref<K extends keyof PluginPrefsMap>(
   key: K,
   value: PluginPrefsMap[K],
 ) {
-  return Zotero.Prefs.set(`${PREFS_PREFIX}.${key}`, value, true);
+  const result = Zotero.Prefs.set(`${PREFS_PREFIX}.${key}`, value, true);
+  setPortableSetting(String(key), value);
+  return result;
 }
 
 /**

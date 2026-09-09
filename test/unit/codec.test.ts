@@ -32,11 +32,12 @@ describe("structured Zotero notes", function () {
       id: "view-1",
       name: "阅读队列",
       mode: "table",
-      visibleFieldIDs: ["research-question"],
       filterText: "",
       layout: {
+        ...createDefaultLayout(),
         columnOrder: ["title"],
-        columnWidths: { title: 400 },
+        columnWidths: { ...createDefaultLayout().columnWidths, title: 400 },
+        visibleColumnIDs: ["title", "research-question"],
         rowHeight: 48,
         rowHeights: {},
         cardWidth: 300,
@@ -140,7 +141,7 @@ describe("structured Zotero notes", function () {
     const preserved = parsed.fields.find(
       (field) => field.id === "research-significance",
     )!;
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(migrated.extraction.instruction).to.equal(
       BUILTIN_FIELD_PROMPTS["research-question"],
     );
@@ -181,7 +182,7 @@ describe("structured Zotero notes", function () {
       ],
     };
     const parsed = parseWorkspaceNote(buildWorkspaceNote(legacy as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.columnWidths.title).to.equal(410);
     expect(parsed.views[0].layout.rowHeights.A).to.equal(80);
@@ -224,7 +225,7 @@ describe("structured Zotero notes", function () {
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
     expect(parsed.views[0].layout.columnOrder).to.include("figureGallery");
     expect(parsed.views[0].layout.visibleColumnIDs).to.include("figureGallery");
-    expect(parsed.views[0].visibleColumnIDs).to.include("figureGallery");
+    expect(parsed.views[0].layout.visibleColumnIDs).to.include("figureGallery");
   });
 
   it("upgrades the default row height and removes metadata duplicated by basic info", function () {
@@ -266,7 +267,7 @@ describe("structured Zotero notes", function () {
       ],
     };
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.rowHeights.CUSTOM).to.equal(210);
     expect(parsed.views[0].layout.visibleColumnIDs).not.to.include("creators");
@@ -348,7 +349,7 @@ describe("structured Zotero notes", function () {
     };
 
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.rowHeights.PAPER1).to.equal(410);
     expect(parsed.views[1].layout.rowHeight).to.equal(260);
@@ -381,7 +382,7 @@ describe("structured Zotero notes", function () {
     };
 
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.rowHeights.CUSTOM_PAPER).to.equal(196);
     expect(parsed.views[1].layout.rowHeight).to.equal(48);
@@ -415,7 +416,7 @@ describe("structured Zotero notes", function () {
     };
 
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.rowHeights.CUSTOM_PAPER).to.equal(212);
     expect(parsed.views[1].layout.rowHeight).to.equal(320);
@@ -449,7 +450,7 @@ describe("structured Zotero notes", function () {
     };
 
     const parsed = parseWorkspaceNote(buildWorkspaceNote(payload as any));
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.rowHeight).to.equal(270);
     expect(parsed.views[0].layout.rowHeights.CUSTOM_PAPER).to.equal(226);
     expect(parsed.views[1].layout.rowHeight).to.equal(240);
@@ -486,7 +487,7 @@ describe("structured Zotero notes", function () {
       } as any),
     );
 
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.columnWidths.figureGallery).to.equal(440);
     expect(parsed.views[1].layout.columnWidths.figureGallery).to.equal(280);
   });
@@ -521,7 +522,7 @@ describe("structured Zotero notes", function () {
       } as any),
     );
 
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].layout.columnWidths.pdfPreview).to.equal(162);
     expect(parsed.views[1].layout.columnWidths.pdfPreview).to.equal(126);
   });
@@ -553,8 +554,81 @@ describe("structured Zotero notes", function () {
       } as any),
     );
     expect(createDefaultLayout().visibleColumnIDs).to.include("figureGallery");
-    expect(parsed.schemaVersion).to.equal(13);
+    expect(parsed.schemaVersion).to.equal(14);
     expect(parsed.views[0].figureKinds).to.deep.equal(["table"]);
-    expect(parsed.views[0].layout.figureKinds).to.deep.equal(["table"]);
+    expect(parsed.views[0].layout).not.to.have.property("figureKinds");
+  });
+
+  it("migrates legacy visibility into one layout array without reviving hidden columns", function () {
+    const workspace = createDefaultWorkspace();
+    const legacyView = {
+      id: "legacy-single-source",
+      name: "已隐藏字段",
+      mode: "table",
+      visibleFieldIDs: [],
+      visibleColumnIDs: ["title", "research-question"],
+      figureKinds: [],
+      filterText: "query",
+      layout: {
+        ...createDefaultLayout(),
+        visibleColumnIDs: ["title", "research-question"],
+        columnWidths: { ...createDefaultLayout().columnWidths, title: 511 },
+        pinnedColumnIDs: ["title"],
+        columnLabels: { title: "主标题" },
+        rowColors: { ABCD1234: "blue" },
+        figureKinds: ["table"],
+      },
+      createdAt: "2026-09-08T00:00:00Z",
+      updatedAt: "2026-09-08T00:00:00Z",
+    };
+    const parsed = parseWorkspaceNote(
+      buildWorkspaceNote({
+        ...workspace,
+        schemaVersion: 13,
+        views: [legacyView],
+      } as any),
+    );
+    const view = parsed.views[0];
+    expect(view.layout.visibleColumnIDs).to.deep.equal(["title"]);
+    expect(view).not.to.have.property("visibleFieldIDs");
+    expect(view).not.to.have.property("visibleColumnIDs");
+    expect(view.figureKinds).to.deep.equal([]);
+    expect(view.layout).not.to.have.property("figureKinds");
+    expect(view.layout.columnWidths.title).to.equal(511);
+    expect(view.layout.pinnedColumnIDs).to.deep.equal(["title"]);
+    expect(view.layout.columnLabels).to.deep.equal({ title: "主标题" });
+    expect(view.layout.rowColors).to.deep.equal({ ABCD1234: "blue" });
+    expect(parseWorkspaceNote(buildWorkspaceNote(parsed))).to.deep.equal(
+      parsed,
+    );
+  });
+
+  it("preserves explicit empty visibility and migrates a layout-only figure filter", function () {
+    const workspace = createDefaultWorkspace();
+    const parsed = parseWorkspaceNote(
+      buildWorkspaceNote({
+        ...workspace,
+        schemaVersion: 13,
+        views: [
+          {
+            id: "empty",
+            name: "隐藏全部",
+            mode: "table",
+            visibleFieldIDs: ["research-question"],
+            visibleColumnIDs: ["title"],
+            filterText: "",
+            layout: {
+              ...createDefaultLayout(),
+              visibleColumnIDs: [],
+              figureKinds: ["formula"],
+            },
+            createdAt: "2026-09-08T00:00:00Z",
+            updatedAt: "2026-09-08T00:00:00Z",
+          },
+        ],
+      } as any),
+    );
+    expect(parsed.views[0].layout.visibleColumnIDs).to.deep.equal([]);
+    expect(parsed.views[0].figureKinds).to.deep.equal(["formula"]);
   });
 });

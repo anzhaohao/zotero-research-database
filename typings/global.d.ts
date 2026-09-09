@@ -20,10 +20,13 @@ declare const __env__: "production" | "development";
 declare const IOUtils: {
   exists(path: string): Promise<boolean>;
   read(path: string): Promise<Uint8Array>;
-  writeUTF8(path: string, content: string): Promise<void>;
+  writeUTF8(path: string, content: string): Promise<number>;
+  write(path: string, bytes: Uint8Array): Promise<number>;
+  copy(sourcePath: string, destinationPath: string): Promise<void>;
+  getChildren(path: string): Promise<string[]>;
   makeDirectory(
     path: string,
-    options?: { ignoreExisting?: boolean },
+    options?: { ignoreExisting?: boolean; createAncestors?: boolean },
   ): Promise<void>;
   remove(
     path: string,
@@ -32,7 +35,9 @@ declare const IOUtils: {
 };
 
 declare const PathUtils: {
+  profileDir: string;
   tempDir: string;
   join(...parts: string[]): string;
   filename(path: string): string;
+  normalize(path: string): string;
 };

@@ -144,7 +144,60 @@ describe("external Agent extraction", function () {
     expect(saved.fields).not.to.have.property("research-question");
   });
 
-  it("falls back from direct PDF access to prepared Zotero text", async function () {
+  it("merges Agent output into the latest record under the repository lock", async function () {
+    const workspace = createDefaultWorkspace();
+    const initial = createEmptyRecord(1, "ITEM0004");
+    const latest = setManualValue(initial, "research-question", "用户刚刚修改");
+    let saved = latest;
+    const repository = {
+      loadRecord: async () => initial,
+      updateRecord: async (
+        _item: Zotero.Item,
+        updater: (record: typeof initial) => typeof initial,
+      ) => {
+        saved = updater(latest);
+        return saved;
+      },
+      saveRecord: async () => {
+        throw new Error("应使用 updateRecord");
+      },
+    } as unknown as ResearchRepository;
+    const agent = {
+      kind: "codex-cli",
+      cancel() {},
+      probe: async () => ({ executable: "codex", version: "test" }),
+      testStructuredOutput: async () => undefined,
+      extractFields: async () => ({
+        value: {
+          "research-question": "Agent 旧判断",
+          "research-outcomes": "Agent 新结果",
+        },
+        executorVersion: "test",
+      }),
+      synthesizeComparison: async () => ({ value: "", executorVersion: "" }),
+    } satisfies AgentBridge;
+    const service = new ExternalAgentExtractionService(
+      repository,
+      agent,
+      async () => ({
+        type: "pdf-fulltext",
+        text: "paper",
+        hash: "hash",
+        attachmentID: 2,
+      }),
+    );
+
+    await service.run(
+      [{ key: "ITEM0004" } as Zotero.Item],
+      workspace,
+      () => undefined,
+    );
+
+    expect(saved.fields["research-question"].value).to.equal("用户刚刚修改");
+    expect(saved.fields["research-outcomes"].value).to.equal("Agent 新结果");
+  });
+
+  it("never exposes the Zotero PDF path when staging is unavailable", async function () {
     const workspace = createDefaultWorkspace();
     const record = createEmptyRecord(1, "ITEM0002");
     const repository = {
@@ -159,7 +212,6 @@ describe("external Agent extraction", function () {
       testStructuredOutput: async () => undefined,
       extractFields: async (_fields: unknown, input: unknown) => {
         calls += 1;
-        if (calls === 1) throw new Error("PDF 读取失败");
         expect(input).to.deep.include({ text: "fallback text" });
         expect(input).not.to.have.property("pdfPath");
         return { value: {}, executorVersion: "test" };
@@ -185,10 +237,10 @@ describe("external Agent extraction", function () {
       (event) => events.push(event),
     );
 
-    expect(calls).to.equal(2);
-    expect(events.some((event) => event.message.includes("回退"))).to.equal(
-      true,
-    );
+    expect(calls).to.equal(1);
+    expect(
+      events.some((event) => event.message.includes("Agent 直读主 PDF 失败")),
+    ).to.equal(false);
     expect(events.at(-1)?.state).to.equal("success");
   });
 });

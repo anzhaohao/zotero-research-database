@@ -504,6 +504,36 @@
 # 2026-08-16 0.3.28 PDF 缩略图与列显示修复
 
 - 隔离 Zotero 的真实本地 PDF 探针明确定位到 `ReferenceError: navigator is not defined`：插件沙箱通过 `ChromeUtils.importESModule()` 载入 Zotero 的 `pdf.mjs` 时，PDF.js 在非浏览器 realm 初始化而失败，最终被旧的笼统错误处理显示为“PDF 不可读”。
+
+# 2026-09-07 接续状态：当前完成项与未完成项
+
+本节是对前文历史记录的当前覆盖说明。前文保留各版本的验收记录，不代表本轮 P5 修改后的最新测试状态。
+
+## 当前已完成
+
+- P0 返回文献库刷新链路：识别 Zotero `library` 标签类型、保留 React root 并原地刷新。
+- P1 数据备份/导入实现：四文件 ZIP、manifest/checksum、严格 itemKey → DOI → 标题匹配、重映射、导入前备份和失败回滚。
+- P3 Linked File 实现：根目录配置、stored → linked 迁移、SHA-256、文件名清理、冲突后缀、sidecar manifest、断链检测、打开目录和未配置根目录 fallback；隔离 Profile 已验证。
+- P4 删除安全边界：只删除插件 manifest 所有文件和空目录，保留用户文件；Notifier 生命周期和设置页入口已实现。
+- P5 首个拆分小步：新增 `src/ui/features/table/tableRows.ts`，并在 `src/ui/ResearchDatabaseApp.tsx` 使用；新增 `test/unit/tableRows.test.ts`。
+- 当前代码级验证：130 项 Node 单元测试通过；TypeScript、涉及源码/测试的 Prettier 和 ESLint、`git diff --check` 通过。
+
+## 当前未完成
+
+- P2 工具栏按钮问题未闭环：虽然 XUL `toolbarbutton`、图标、左右位置偏好和 HTML fallback 已实现，但用户实际测试仍反馈按钮消失；需要继续验证真实宿主布局与显示条件。
+- 最近一次隔离宿主完整测试为 16 passed、1 failed，失败是拖拽进入右侧 gutter 后横向自动滚动未启动；此前集合切换失败在重跑中已通过，不能将全部宿主测试写成通过。
+- 全局 `npm run lint:check` 仍被根目录两个 Markdown 进度文档的 Prettier 告警阻断；代码范围检查已通过，不能把全局 lint 宣称为通过。
+- 还没有对本轮 P5 修改重新生产构建并核对 XPI 哈希。
+- P5 后续拆分、Service 依赖注入收口、Zotero 9 类型补全和减少 `(Zotero as any)` 未完成。
+- P6 性能优化（增量 diff、缩略图 LRU、`flatRows` 缓存）未开始。
+- 正式 Zotero 窗口人工验收未完成；正式 Profile 未安装本轮 XPI。P1 跨 Profile、P2 深浅主题/左右位置、P3/P4 迁移/断链/删除/用户文件保护仍待明确授权后的验收。
+
+## 下一步
+
+1. 先处理 P2 按钮消失和宿主横向自动滚动失败。
+2. 重新执行完整验证并重新构建 XPI。
+3. 同步本文件与 `HANDOFF.md` 的最终结果后，再继续 P5 后续拆分。
+
 - `PdfThumbnailService` 改为从 Zotero 主窗口动态导入同一份内置 PDF.js 模块，并固定使用 Zotero 打包的 worker；首次页数读取和 PNG 缩略图渲染均在真实 Zotero 9.0.6 沙箱通过。缩略图磁盘缓存的创建、读取或写入失败现在只记录带 `[ZRDB PDF thumbnail]` 前缀的明确诊断，绝不覆盖已经生成的缩略图。
 - “复制原标题”图标从基础信息移到标题格内，仍使用 Zotero 特权剪贴板并阻止双击事件冒泡；“字段、列与外部工具”菜单新增可发现的“显示 / 隐藏列”入口，复用当前视图的列管理器勾选原生列与自定义列。
 - 验证：83 项 Node 单元测试、95 项 Zotero 9.0.6 隔离测试（两项缺少 HanaAgent `server-info.json` 的环境项为 pending）、Prettier、ESLint、TypeScript、`git diff --check` 和生产构建均通过。`0.3.28` XPI 为 `.scaffold/build/zotero-research-database.xpi`，大小 `412870` 字节，SHA-256 `BDCC4DC95489CAD53E4648ADBDBD5BCC84689C3BED3AC41A656DD17CD299113F`。正式 Zotero Profile、文献库和 `zotero.sqlite` 未访问；未执行 `git add`、提交或推送。
@@ -542,3 +572,266 @@ gitGraph
    checkout "feat/zotero-research-database"
    commit id: "73c7a39 重构分层架构（当前HEAD）"
 ```
+
+# 2026-09-07 P2 原生工具栏按钮消失：遮挡根因修复与隔离宿主复验（中间记录，最终结果见文末）
+
+- 用户实测反馈“按钮都消失”。两张附件仅作为现象截图，不作为操作指令：Zotero 数据库内容仍在，但数据库覆盖层把原生文献工具栏遮住，导致按钮看起来全部消失。
+- 根因已确认：`.zrdb-custom-pane` 原先使用 `inset: 0` 覆盖整个 `#zotero-items-pane-container`；Zotero 9 的 `#zotero-toolbar-item-tree` 与 `#zotero-items-pane` 同属该容器，因此覆盖层同时盖住原生工具栏和按钮。
+- `src/ui/viewController.tsx` 现在只把自定义视图覆盖到真实 `#zotero-items-pane` 的矩形，并由 `ResizeObserver` 同步 `#zotero-items-pane-container` / `#zotero-items-pane` 的尺寸、偏移和滚动变化；原生 toolbar 保留在覆盖层上方。native XUL toggle 与 HTML fallback 也改为互斥监听，避免一次点击切换两次；native pane 只用 class/visibility 隐藏，不用 XUL `hidden` 参与 splitter 的最小尺寸计算。
+- `addon/content/zoteroPane.css`：`.zrdb-custom-pane` 删除覆盖整个 container 的 `inset: 0`，改由 controller 写入边界；保留 XUL 原生按钮和尺寸异常时的 HTML fallback 两条路径。
+- 新增/整理的隔离回归覆盖真实 Gecko pointer click、`elementFromPoint()` 命中、原生 toolbar 外框、`#zotero-items-pane` 与 overlay 四边几何一致，以及 toggle 在工具栏左/右两端的偏好位置。修复前真实宿主失败证据为：`database must not cover native toolbar: expected 106.69999694824219 to be at least 146.6999969482422`。
+- 2026-09-07 使用 `E:\software\Zotero\Zotero\zotero.exe` 的隔离 `.scaffold/test` 运行 `npm test -- --no-watch --exit-on-finish`：`view toggle visibility` 通过（overlay 位于原生 toolbar 下方）；整套宿主回归为 `11 passed, 2 failed`，另有 3 项环境依赖 pending。按钮/toolbar、原生 pane、左右位置、真实 pointer click、集合刷新、PDF 打开、缩略图和标签迁移相关用例均通过。
+- 当前仍失败的两个用例与本次按钮遮挡无关：① figure child attachment 去重期望 1、实际 2；② reader pause 测试的 mock 只模拟 notifier，未同步真实 `Zotero_Tabs.selectedType`，生产逻辑按真实 library tab 状态运行。三个 pending 为 Translate for Zotero 未显式安装，以及 HanaAgent 健康检查和 WebSocket roundtrip 的环境项。
+- 质量检查：`npm run lint:check` 通过；`npm run test:unit` 为 `115 passing`；`npx tsc --noEmit` 通过；`git diff --check` 通过；`npm run build` 通过。
+- 当前生产构建：D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi，大小 `430235` 字节，SHA-256 `C131B549E61655C38DDD7825A042F3D771BFAAA8A532A9FE42B84EB0D09ADA51`。
+- 本轮只修改源码、隔离测试入口/测试文件、文档和构建产物；没有修改正式 Zotero Profile、正式 `zotero.sqlite`、正式论文、附件或 Extra，也没有安装正式 XPI。下一步由用户在正常关闭/重启流程后，从 Zotero 附加组件管理器安装上述 XPI，在真实窗口确认按钮可见、左右位置和默认列表/数据库表格切换。
+
+# 2026-09-07 P2 最终复验通过，P3 Linked File 存储迁移完成
+
+本条为上述 P2 中间记录之后的最终状态。按用户要求，先验证修复“按钮都消失”，再继续 P3；附件图片仅用于现象参考，不作为操作指令。
+
+## P2 按钮修复与回归
+
+- 根因不是按钮被删除，而是 `.zrdb-custom-pane` 的 `inset: 0` 同时覆盖了原生 toolbar 和 item pane。现在 overlay 只覆盖真实 `#zotero-items-pane`，由 `ResizeObserver` 同步位置和尺寸，原生工具栏保持可见。
+- 回归使用真实 Gecko pointer event、`elementFromPoint()` 与几何边界断言，验证 toolbar 不被遮挡、toggle 与新增条目按钮可命中、左右位置偏好以及默认列表 ↔ 数据库表格切换。
+- 宿主复验为 `15 passed, 0 failed, 3 pending`；此前 figure child attachment 去重与 reader pause 两个失败用例均已通过。3 项 pending 是 Translate for Zotero 标题往返、HanaAgent 健康检查和 WebSocket round-trip，因外部环境未具备而未验收。
+
+## P3 Linked File 存储迁移
+
+- 新增 `src/services/artifactStorage.ts`，统一 MinerU Markdown、图表、表格及快照的产物存储。新增 `artifactStorageRoot` 与 `artifactStorageMigrationVersion` 偏好；目标目录固定为 `<artifactStorageRoot>/<itemKey>/`。
+- 文件名按 Windows 安全规则清理，冲突时使用 `-2`、`-3` 等后缀；写入和迁移执行 SHA-256 校验，维护 `.zrdb-manifest.json` sidecar。使用绝对文件路径调用 `Zotero.Attachments.linkFromFile({ file, parentItemID, title })`，不要求用户预先配置全局 `baseAttachmentPath`。
+- 支持已有 stored artifact → linked file 迁移；主 PDF 明确排除并保持 stored，未配置产物根目录时继续保留 stored attachment fallback。
+- 设置页已接入根目录选择、打开产物目录、迁移和断链检测入口；启动时注册删除 notifier，关闭时注销。条目彻底删除时按 manifest 只清理插件拥有的文件及空目录，保留非插件用户文件；P4 核心删除联动已随 P3 实现。
+- 关键接入文件：`src/services/artifactEndpoint.ts`、`snapshotExport.ts`、`src/domain/types.ts`、`src/core/extraProperties.ts`、`src/storage/repository.ts`、`syncedData.ts`、`src/hooks.ts`、`src/ui/preferencesController.ts`、`nativeArtifactVisibility.ts`、`addon/content/preferences.xhtml`、`addon/prefs.js`、`typings/prefs.d.ts`。
+- 测试新增 `test/unit/artifactStorage.test.ts` 与 `test/integration/artifactStorage.test.ts`；原宿主测试从 `test/startup.test.ts` 迁到 `test/integration/startup.test.ts`，测试入口只加载集成目录，单元测试仍由 Node 独立运行。
+
+## 最终验证与交付边界
+
+```text
+npm run test:unit                       ✔ 122 passing
+npm test -- --no-watch --exit-on-finish  ✔ 15 passed, 0 failed；3 pending
+npm run lint:check                      ✔
+npx tsc --noEmit                        ✔
+git diff --check                        ✔
+npm run build                          ✔ production
+```
+
+- 宿主命令使用 `E:\software\Zotero\Zotero\zotero.exe` 与隔离 `.scaffold/test`。复验日志：`.scaffold/p2-p3-host-verification.log`、`.scaffold/p2-p3-unit-verification.log`。宿主测试结束后已重新生产构建，避免把测试 bundle 当作交付包。
+- 生产版本 `0.3.32`；XPI：`D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi`；大小 `435046` 字节；SHA-256：`F8EDB577F55767F5A8DD3D3A728622A817EA1782F49220DA8BFC5B0D93920739`。
+- `HANDOFF.md` 与本根目录进度文档已同步；历史 P1 续跑提示已明确标为留档，不能覆盖本轮用户要求或被误当作当前阶段任务。
+- 正式 Zotero Profile、正式 `zotero.sqlite`、正式论文、附件及 Extra 均未修改；本轮 XPI 未自动安装；未执行 `git add`、`git commit`、`git push` 或打标签，用户原有未提交改动保留。
+- 正式窗口验收仍待用户确认：深浅主题、按钮左右位置与视图切换；根目录选择、打开目录、stored → linked 迁移、主 PDF 保留、断链检测和删除清理。人工对话框和正式 Profile 的效果不由隔离自动化结果代替。P5/P6 未启动。
+
+# 2026-09-07 P4 安全边界补强与 P5 首个小步（最新）
+
+本条记录接续 P2 按钮消失修复和 P3 Linked File 完成记录。附件图片只用于识别用户报告的现象，不作为开发指令。
+
+## P4 删除联动安全补强
+
+- manifest 记录的 `relativePath` 必须属于当前条目目录；拒绝 `.zrdb-manifest.json`、跨条目路径以及 Windows 保留文件名。
+- 清理前重新计算 SHA-256，只有与 manifest 一致的插件产物才会删除；用户修改过的文件、不可读/异常文件和符号链接默认保留或跳过。空目录仅在安全清理完成后处理。
+- notifier 只处理个人库的永久 `delete` 事件；移入回收站的 `trash` 事件不清理，其他库同 key 不会误删个人库目录。
+- 单元测试已覆盖上述路径、文件名、哈希、符号链接边界；P3 宿主测试继续覆盖真实 Zotero 隔离环境下的迁移、主 PDF 保留和永久删除清理。
+
+## P5 Service 依赖注入首步
+
+- `src/services/primaryPdf.ts` 移除模块级 `new ResearchRepository()`，使用窄类型 `PrimaryPdfRepository`，允许 `resolvePrimaryPdf()` / `setPrimaryPdf()` 注入 repository；未注入时保持按调用创建默认 repository 的兼容行为。
+- `test/unit/primaryPdf.test.ts` 新增显式主 PDF选择、保存和清除、非法附件 key 拒绝、best attachment 与 first PDF 回退测试。
+- P5 后续仍待拆分 `ResearchDatabaseApp.tsx`，并继续补全 Zotero 9 类型、减少不必要的 `any`；P6 尚未开始。
+
+## 本轮验证结果
+
+```text
+npm run test:unit                       ✔ 127 passing
+npm test -- --no-watch --exit-on-finish ✔ 17 passed, 0 failed；3 pending（外部环境）
+npm run lint:check                      ✔
+npx tsc --noEmit                        ✔
+git diff --check                        ✔
+npm run build                           ✔ production
+```
+
+- 宿主测试使用 `E:\software\Zotero\Zotero\zotero.exe` 与隔离 `.scaffold/test`；宿主测试完成后已重新执行生产构建。
+- pending 项为 Translate for Zotero 标题往返、HanaAgent 健康检查和 HanaAgent WebSocket round-trip，受外部插件/服务环境影响，不能视为通过。
+- P2 回归继续确认真实 Gecko 下 toolbar、toggle 和新增条目按钮可命中，overlay 未覆盖 native toolbar；正式窗口验收仍由用户完成。
+- 最新生产 XPI：`D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi`；版本 `0.3.32`；大小 `435320` 字节；SHA-256 `05149E68D345291E7E18AA44BA8E12A5D10A6659E47C40414F19C954EF3C68C9`。
+- 正式 Zotero Profile、正式数据库、论文和附件没有被修改；没有自动安装 XPI；没有执行 Git add/commit/push 或打标签。用户已有未提交改动保持不变。
+
+## 下一步
+
+1. 按既定 P5 方案继续拆出低耦合的表格/主 PDF 域逻辑，每步先单元测试、再隔离 Zotero 回归、最后重建生产 XPI。
+2. 正式窗口验收前不安装 XPI；重点仍是 P2 深浅主题和左右位置，以及 P3 根目录、迁移、主 PDF、断链和删除安全行为。
+
+---
+
+# 2026-09-07 P5 表格列模型拆分与最新验证
+
+## 已完成：P5 表格列模型低耦合拆分
+
+- 新增 `src/ui/features/table/tableColumns.ts`，集中维护 `ColumnDefinition`、内置列、动态研究字段列、归档/内置 `translated-title` 过滤、列顺序/别名、基础信息列折叠和固定列排序。
+- `src/ui/ResearchDatabaseApp.tsx` 的 `useColumns()` 与 `ColumnManager` 已复用共享列模型，删除组件内重复列定义；表格交互逻辑未主动改变。
+- 新增 `test/unit/tableColumns.test.ts`，覆盖归档字段过滤、列顺序、列别名、基础信息列折叠和固定列排序。
+
+## 最新验证结果
+
+```text
+npm run test:unit                       ✔ 133 passing
+npx prettier --check <P5 files>         ✔
+npx eslint <P5 files>                   ✔
+npm run lint:check                      ✔
+npx tsc --noEmit                        ✔
+git diff --check                        ✔
+npm test -- --no-watch --exit-on-finish ✔ 17 passed, 0 failed；1 pending
+npm run build                           ✔ production
+```
+
+- 宿主回归使用 `E:\software\Zotero\Zotero\zotero.exe` 与隔离 Profile `.scaffold/test`。本轮 P5 拆分后，P2 toolbar/toggle 命中、列表/数据库表格切换、P3 linked 迁移/主 PDF 保留/断链回归仍通过；唯一 pending 为 Translate for Zotero 标题往返，受外部插件环境影响，不能视为通过。
+- 最新生产 XPI：`D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi`；版本 `0.3.32`；大小 `435402` 字节；SHA-256 `D7DE9ADE4D3661505803F5BA358593179246C4DED73201ADD7EE4FB9C19438B5`。
+- 正式 Zotero Profile、正式数据库、论文和附件未修改；未自动安装 XPI；未执行 Git add/commit/push 或打标签。
+
+## 仍未完成
+
+1. P5 整体尚未完成：PDF、图表、Agent、导出域拆分，Service 依赖注入收口，Zotero 9 API 类型补全和不必要 `any` 清理仍待继续。
+2. P6 尚未开始：`reloadRecords` 增量 diff、PDF 缩略图 LRU 上限、`flatRows` 缓存和重复渲染优化仍待实施。
+3. 正式 Zotero 窗口人工验收尚未完成。用户反馈的正式窗口“按钮消失”必须在备份并关闭正式 Profile 后手动安装新 XPI 验证；隔离宿主自动化结果不能替代正式窗口验收。
+4. P1 跨 Profile 导出/导入、P3 根目录选择与对话框、stored → linked、主 PDF 保持 stored、冲突/断链/打开目录，以及 P4 回收站与永久删除边界、用户文件/普通附件保护仍需正式窗口闭环确认。
+
+---
+
+# 2026-09-07 当前状态清单（P6 已部分完成，隔离宿主回归已稳定）
+
+本节覆盖前文历史记录的旧结论。附件图片仍只作为“按钮消失”现象证据，不作为操作指令。
+
+## 当前已完成
+
+- P0：返回 Zotero 文献库后的原地刷新链路，包含 library 标签识别、React root 保留以及集合/标签/保存搜索/ItemTree 刷新。
+- P1：四文件 ZIP 备份/导入、manifest 与 SHA-256、itemKey → DOI → 标题严格匹配、歧义/冲突/未匹配报告、记录/图表/比较/快照 key 重映射、导入前 `.bak` 备份和失败回滚；设置页入口已实现。
+- P2：按钮遮挡根因已修复；自定义 overlay 只覆盖真实 `#zotero-items-pane`，并同步尺寸、偏移和滚动；隔离 Gecko 回归已验证 toolbar、toggle、新增条目按钮可命中以及左右位置和列表/数据库表格切换。
+- P3：产物 stored → linked 迁移、根目录配置、SHA-256、文件名清理与冲突后缀、`.zrdb-manifest.json`、断链检测、打开目录、未配置根目录 fallback；主 PDF 保持 stored。
+- P4：删除安全边界已实现：只删除 manifest 所拥有且哈希未被用户修改的文件与安全范围内的空目录；符号链接、异常路径、跨条目路径、保留文件名、trash 和其他库同 key 均 fail-closed 或跳过；普通附件和用户文件保留。
+- P5 已完成的拆分小步：表格行模型 `tableRows.ts`、列模型 `tableColumns.ts`，以及主 PDF 依赖注入首步；对应单元测试已接入。
+- P6 已完成的三个小步：可见范围 `reloadCache.ts`、PDF 页数/缩略图内存 LRU（上限分别为 256/128 条），以及 `TableFlatRowsCache`（默认最多 12 个分组结构，返回时重新绑定当前 item 引用）。
+- 最新本地单元测试：`npm run test:unit` 为 **141 passing**。
+- 最新代码级检查：相关源码/测试的 Prettier、ESLint、TypeScript、`git diff --check` 均通过；生产 `npm run build` 通过。
+- 最新隔离宿主回归：**17 passed, 0 failed, 1 pending**；唯一 pending 为 Translate for Zotero 标题往返，因未显式提供第三方插件环境。HanaAgent 健康检查和 WebSocket round-trip 本轮均通过。
+- 最新生产 XPI 已重新构建：版本 `0.3.32`，大小 `436247` 字节，SHA-256 `5264A0358295DDB0E36D91EEB488729A0A2FBD13ACBBC820049900EF57ED17F5`。
+
+## 当前未完成
+
+- 正式 Zotero 窗口人工闭环仍未完成：用户此前在正式 Zotero 窗口看到“按钮都消失”，隔离宿主修复结果不能替代在备份并关闭正式 Profile 后的手动安装和验收。
+- P1 跨 Profile 导出/导入仍待正式窗口验收。
+- P3 正式窗口边界仍待验收：根目录选择/对话框、打开目录、stored → linked、冲突处理、断链检测、主 PDF 保持 stored。
+- P4 正式窗口边界仍待验收：回收站与永久删除差异、用户修改文件、符号链接、普通附件和用户文件保护。
+- P5 尚未整体完成：PDF、图表、Agent、导出域继续拆分，Service 依赖注入收口，Zotero 9 API 类型补全以及清理不必要的 `any` 仍待继续。
+- P6 仅部分完成：`reloadRecords` 增量 diff、重复渲染优化、其他增量刷新策略和性能回归仍待实施/验证；`flatRows` 缓存已完成但还需要宿主性能回归。
+- 正式 XPI 尚未安装；未执行 `git add`、`git commit`、`git push` 或打标签。
+
+## 下一步顺序
+
+1. 继续 P5/P6 剩余拆分、增量刷新和性能回归，保持当前隔离宿主 17/0/1 基线。
+2. 每个小步完成后重新执行单元测试、隔离宿主测试、代码检查和生产构建，并同步本文件与 `HANDOFF.md`。
+3. 仅在用户明确确认正式 Profile 已备份并关闭后，安装本次 XPI 并完成正式窗口人工验收；在此之前不安装正式 XPI。
+
+## 十一、2026-09-08 P5/P6 收尾与隔离宿主闭环
+
+本节覆盖本轮接续后的最新状态，旧章节中的“P6 尚未开始”“TypeScript 未通过”以及旧 XPI 哈希均已被当前证据 supersede。
+
+### 已完成
+
+- P5 UI 拆分完成：`ResearchDatabaseApp.tsx` 从 5632 行降至约 1100 行，拆出 `features/table`、`features/pdf`、`features/figures`、`features/agent`、`features/export` 和 `features/shared`；主入口保留工作区、筛选排序、跨域编排。
+- P5 服务收口完成：新增插件范围共享 `getResearchRepository()`、`createResearchServices()`；主 PDF、内容源、产物导入/存储、快照导出和标签迁移均支持同一仓库注入；补充 Zotero 9 SyncedSettings 类型并减少不必要的 `any`。
+- P6 增量刷新完成：可见范围缓存、`ReloadQueue` 请求合并、按条目 key 精确本地数据变更通知、Map 行引用复用和切换期间旧范围结果丢弃。
+- P6 PDF 缓存完成：缩略图 LRU 上限 50，页数缓存上限 256；缓存 key 含库、附件、文件修改时间和大小；插件关闭时清理缓存；PDF.js 文档统一释放。
+- P2 reader 守卫修复：每次从 Zotero 权威 `selectedType` 判断，reader 中不会触发数据库 render；返回 library 后继续自愈刷新。
+
+### 当前验证证据（2026-09-08）
+
+- `npm run test:unit`：146 passing。
+- `npx tsc --noEmit`：通过。
+- `npm run lint:check`、`npx eslint .`、`git diff --check`：通过。
+- 隔离 Zotero：`npm test -- --no-watch --exit-on-finish` → 18 passed、0 failed、0 pending；Translate for Zotero 2.4.7 和 HanaAgent 健康检查/WebSocket 结构化往返均已真实验证。
+- 生产构建：`.scaffold/build/zotero-research-database.xpi`，441072 bytes，SHA-256 `2A785F676E762C1DC592CFE27C53C3F27D3F146C5F67BF626411A435A0B063FA`。
+- 本轮未安装 XPI 到正式 Profile，未修改正式 `zotero.sqlite`、论文或附件。
+
+### 仍需用户完成的正式窗口闭环
+
+在用户确认正式 Profile 已备份并完全关闭后，使用附加组件管理器安装上面这个 XPI，并人工验收 P1/P2/P3/P4：按钮深浅主题与左右位置、跨 Profile 导入、根目录选择与 stored→linked、主 PDF 保持 stored、断链/打开目录、回收站与永久删除、用户文件和普通附件保护。当前不能把隔离宿主结果替代正式窗口验收，也不能把 3 个外部依赖 pending 当作通过。
+
+### Git 状态
+
+当前仍保留未提交修改；本轮未执行 `git add`、`git commit`、`git push`、`git reset` 或 `git clean`。修改前备份：`E:\software\AI改前备份\20260908_181242_Zotero数据库P5P6续跑_修改前备份_codex`。
+
+# 2026-09-08 性能回归、图表刷新修复与生产构建（最新）
+
+- 性能宿主测试的构建阻塞已修复：`test/integration/performance.test.ts` 不再显式导入 Mocha，避免 esbuild 把 Node 内置模块带入 Zotero bundle。
+- PDF 性能测试现在按 `attachment.getFilePathAsync()` 返回的实际存储路径统计源读取，并在 `finally` 中清理临时文件、附件和父条目。
+- 修复 `useResearchData.ts` 的图表 stale identity 问题：刷新比较改用 `figureDataSignature()`，包含 MinerU 图表的图注、类型、页码、区域、来源 PDF、哈希，以及 Zotero Figure 的 entryID、imageRef 和 cacheRevision；新增 `test/unit/figureRecords.test.ts`。
+- 验证通过：`npm run test:unit` 148 passing；`npx tsc --noEmit -p test/tsconfig.json`；`npm run lint:check`；`npx eslint .`；`git diff --check`。
+- 隔离宿主使用 `E:\software\Zotero\Zotero\zotero.exe`、正式 Translate for Zotero 2.4.7 XPI 和 `.scaffold/test`，`npm test -- --no-watch --exit-on-finish` 为 **21 passed、0 failed、0 pending**。
+- 宿主性能证据：10,000 条记录 `39084ms` 且并发上限 8；10,000 行表格缓存 `180ms`；51 个 PDF 宽度 `5279ms`，并通过 51 次源读取、重复命中不重读和最多 50 条缩略图缓存断言。
+- 本轮生产构建：`.scaffold/build/zotero-research-database.xpi`，版本 `0.3.32`，大小 `441471` 字节，SHA-256 `4F2B904B2A26934C8935AD058D72DAC1056A280D95DE643370F4D55AEDC3958B`。
+- 本轮没有新启动 HanaAgent；正式 Profile、`zotero.sqlite`、论文和附件未修改；未安装 XPI，未执行 `git add`、`git commit`、`git push`、`git reset` 或 `git clean`。
+
+## 仍需用户完成的正式窗口闭环
+
+只有在用户确认正式 Profile 已备份并完全关闭后，才安装本次 XPI。安装后需要人工验收：P2 深浅主题、按钮左右位置和列表/表格切换；P1 跨 Profile 导入；P3 根目录、stored → linked、主 PDF 保持 stored、断链和打开目录；P4 回收站/永久删除、用户修改文件、符号链接、普通附件和用户文件保护。隔离宿主 21/0/0 不能替代这一步。
+
+### 正式安装前状态（2026-09-08）
+
+- 已确认正式 `zotero.exe` 未运行。
+- 已创建正式 Profile 只读备份：`E:\software\AI改前备份\20260908_正式ZoteroProfile安装前备份_codex`；Profile 备份 `228503752` 字节，数据目录备份 `4912` 字节。
+- 当前仍未安装 XPI，等待用户明确授权正式安装后再进行附加组件管理器安装和人工验收。
+
+### 正式安装结果（2026-09-08）
+
+- 用户已确认安装并通过 Zotero 附加组件管理器完成安装；`extensions.json` 显示版本 `0.3.32`、`active=true`、`visible=true`、`userDisabled=false`、`appDisabled=false`，安装来源为 `about:addons`。
+- 正式 Profile 中的 XPI 与生产构建逐字节一致：441471 字节，SHA-256 `4F2B904B2A26934C8935AD058D72DAC1056A280D95DE643370F4D55AEDC3958B`。
+- 正式 Zotero 9.0.6 的 `23119` 端口正常监听；错误令牌请求返回 `401`，证明插件端点已注册并启用认证。
+- 当前 Windows 原生窗口控制服务未配置，按钮可见性、深浅主题、左右位置和跨 Profile/P3/P4 对话框仍需用户在正式窗口手动确认。
+
+## 2026-09-08 Codex UI consolidation checkpoint
+
+- Implemented formula cards with scoped offline KaTeX HTML+MathML rendering, safe fallback, independent copy action, and preserved image/PDF click behavior.
+- Consolidated field definitions into plugin settings; current-view column layout owns visibility/order/aliases/pins. Workspace schema is now 14 with legacy visibility and figure-kind migration, including explicit empty selections.
+- Moved persistent Agent/MinerU settings and artifact-import token controls into plugin settings. Menus now group fixed columns, figure display, processing tools, and settings.
+- Validation: 164 unit tests, TypeScript, Prettier, ESLint, diff check, and isolated Zotero host tests (21 passing; external HanaAgent tests skipped when unavailable). Production XPI rebuilt as version 0.3.33.
+
+## 2026-09-09 设置保存修复（0.3.34）
+
+- 修复带 `html:` 前缀的 XHTML 复选框识别：加载和保存都通过 `localName`/`type` 识别并使用 `checked`。旧版真实宿主已复现“取消显示图 → 保存提示成功 → 偏好仍为 true”。
+- 恢复并完善 `test/integration/preferences.test.ts`：实际点击保存，检查 boolean/int/string 原生类型和值，关闭重开核对控件，重复打开字段页只初始化一次。
+- 修正此前未完成设置窗口验收的解释：scaffold 把普通 Error 序列化为 `{}` 导致 CLI 仅显示 `undefined`；补上可序列化的错误信息后已能定位真实失败，设置窗口在隔离宿主可正常测试。
+- 新增 `ZRDB_TEST_GREP` 支持定向宿主回归；保留原完整测试入口。未修改正式 Zotero Profile、论文或附件。
+- 验证：164 项单元测试通过；真实设置窗口定向回归通过。完整宿主回归中设置项及其余功能通过，公式复制用例暴露测试初始化时序竞争；补齐 React effect 屏障和可控异步剪贴板后，公式与设置 4 项联合宿主回归全部通过。未调用外部模型，3 项外部服务测试保持未启用。
+
+## 2026-09-09 独立研究数据库目录与可靠性闭环（当前）
+
+- 用户授权开始实施“Obsidian 式独立研究数据库目录”；本轮未执行 git add、commit、push、reset、clean。修改前备份：`E:\software\AI改前备份\20260909_zrdb独立数据目录_codex`。
+- 新增 `src/storage/dataRoot.ts`：数据根目录指针、manifest、staging/transactions/artifacts 目录初始化、旧 `research-data-v1.json` 迁移、原子 JSON 写入与损坏恢复候选。
+- 新增 `src/storage/settingsStore.ts`：选定数据目录后把非敏感插件配置写入 `settings.json`；Zotero Prefs 保留 dataRoot 等 bootstrap 信息与敏感凭据。
+- localData 在用户选择数据目录后使用 `database.json`；未选择时保留旧 profile 路径兼容。设置页改为“研究数据库目录”，用户备份可直接复制整个目录；ZIP 服务保留作旧版本迁移兼容。
+- Agent：新增条目级写锁和 `updateRecord` 最新记录字段合并；用户期间手动修改/锁定字段优先；取消不会触发 PDF→文本 fallback；暂存失败不回传原始 Zotero PDF 路径；外部进程 kill/timeout 等待退出；比较 prompt 标记不可信数据。
+- MinerU：网络请求和下载使用有界 timeout；转换、写盘、导入前检查取消；Zotero 导入阶段状态明确为不可取消；窗口关闭会请求取消并等待；提取界面统一 finally 清理运行状态。
+- 产物：统一支持 dataRoot/artifacts/<libraryID>，条目级串行锁，manifest 原子写和回读校验，失败删除本次创建附件/文件，导入失败恢复 manifest，迁移保留旧源文件/附件并支持重定位。
+- 新增/更新故障回归：数据目录迁移、Agent 最新记录合并、暂存路径保护、MinerU 挂起请求取消、产物事务/同库清理。
+- 验证：`npm run test:unit` 168 passing；`npm run lint:check` 通过；`npm run build` 通过；隔离 Zotero 真实宿主已通过视图、产物存储迁移、公式渲染和设置持久化回归。一次宿主重跑曾因旧测试进程占用 profile 失败，清理隔离进程后重新通过。
+- 限制：尚未在正式 Profile 安装 XPI；尚未完成移动数据目录后的人工 linked attachment 重联验收；Zotero 宿主完整测试入口在当前版本只报告已加载的集成项，需后续确认 scaffold 是否按预期收集全部测试。
+
+### 2026-09-09 最终验证补充
+
+- 修正设置页保存数据目录时的兼容边界：未明确选择新目录时不会把旧 profile 目录误写成新的 `dataRoot`；选择新目录后先创建/迁移目标目录，提示重启 Zotero 完成切换。
+- `settingsStore` 增加可等待写入队列，数据目录单元测试同时验证旧数据库迁移和 settings.json 配置持久化。
+- 最终验证：169 项单元测试通过；Prettier、ESLint、TypeScript、生产构建通过；真实 Zotero 隔离设置窗口定向回归 1 passed；此前完整隔离宿主回归 22 passed、2 pending。
+
+## 2026-09-09 发布前修复（0.3.35）
+
+- 修复数据根目录切换的高风险路径：`setDataRoot()` 只保存下次启动指针，活动根目录和本机会话缓存保持不变；设置页目录选择只填入控件，保存后提示重启生效。
+- 新库不会从其它 Profile 自动继承 `database.json`；默认旧目录可将同目录 `research-data-v1.json` 经 schema 校验后迁移为 `database.json`。主库损坏时仅在 `.bak` 有效时原子恢复，否则拒绝覆盖。
+- 便携设置采用白名单，敏感接口令牌和 bootstrap 目录指针不会写入 `settings.json`；保存等待写队列，坏文件保留并报错，首次失败可重试。
+- 验证：`npm run test:unit` 为 179 passing；`npx tsc --noEmit` 与测试 TypeScript 检查通过。下一步执行隔离 Zotero 宿主回归和 0.3.35 生产构建。
+
+### 0.3.35 生产包完成（2026-09-09）
+
+- 生产 XPI：`.scaffold/build/zotero-research-database.xpi`；稳定副本：`.scaffold/releases/zotero-research-database-0.3.35.xpi`。
+- 大小 `903194` 字节；SHA-256 `A482A48DD35B6928B816A740F03353B64D1A17494EE38271BC83027365D85350`。
+- ZIP manifest 已核对版本 `0.3.35` 与插件 ID；未安装到正式 Zotero。
+- 验证：179 项单元测试、Prettier、ESLint、两套 TypeScript 检查通过；设置宿主定向回归 1 passed。全量宿主仍有既有 PDF 性能超时与若干 DOM 时序失败，未将其宣称为通过。

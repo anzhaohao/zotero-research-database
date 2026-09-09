@@ -1,4 +1,4 @@
-import { createDefaultLayout, createID } from "../domain/defaults";
+import { createID } from "../domain/defaults";
 import type {
   FieldDefinition,
   FieldType,
@@ -13,14 +13,27 @@ import {
   MinerUConversionService,
   parseMinerUProfile,
 } from "../services/mineru";
-import {
-  createBackupZip,
-  formatImportReport,
-  importBackupZip,
-  suggestedBackupFileName,
-} from "../services/backup";
 import { ResearchRepository } from "../storage/repository";
 import { getPref, setPref } from "../utils/prefs";
+import { getDataRoot, setDataRoot } from "../storage/dataRoot";
+import {
+  flushPortableSettings,
+  initializePortableSettings,
+} from "../storage/settingsStore";
+import {
+  getArtifactStorageRoot,
+  getCanonicalArtifactStorageRoot,
+  migrateStoredArtifacts,
+  openArtifactStorageDirectory,
+  relocateArtifactStorageRoot,
+  scanBrokenArtifactLinks,
+  setArtifactStorageRoot,
+} from "../services/artifactStorage";
+import {
+  ensureArtifactImportToken,
+  rotateArtifactImportToken,
+} from "../services/artifactEndpoint";
+import { copyPlainText } from "../services/clipboard";
 
 const prefKeys = [
   "defaultRowHeight",
@@ -31,6 +44,9 @@ const prefKeys = [
   "cornerStrength",
   "shadowStrength",
   "defaultExportScope",
+  "viewTogglePosition",
+  "artifactStorageRoot",
+  "dataRoot",
   "zoteroFigureEnabled",
   "zoteroFigureShowFigures",
   "zoteroFigureShowTables",
@@ -63,18 +79,6 @@ const prefKeys = [
   "mineruTimeoutMs",
 ] as const;
 
-const nativeColumns = [
-  ["pdfPreview", "PDF 首页预览"],
-  ["title", "文献标题"],
-  ["basicInfo", "基础信息"],
-  ["creators", "作者"],
-  ["year", "年份"],
-  ["date", "日期"],
-  ["DOI", "DOI"],
-  ["url", "URL"],
-  ["tags", "标签"],
-] as const;
-
 const fieldTypes: Array<[FieldType, string]> = [
   ["text", "短文本"],
   ["longText", "长文本"],
@@ -91,16 +95,20 @@ function cloneFields(fields: FieldDefinition[]): FieldDefinition[] {
   return JSON.parse(JSON.stringify(fields)) as FieldDefinition[];
 }
 
+function isCheckboxControl(
+  control: HTMLInputElement | HTMLSelectElement,
+): control is HTMLInputElement {
+  // Zotero loads XHTML inputs as <html:input>; tagName includes that prefix.
+  return control.localName === "input" && control.type === "checkbox";
+}
+
 function inputValue(root: Element, key: string): string | boolean {
   const control = root.querySelector(`[data-pref="${key}"]`) as
     | HTMLInputElement
     | HTMLSelectElement
     | null;
   if (!control) return "";
-  return control.tagName.toLocaleLowerCase() === "input" &&
-    (control as HTMLInputElement).type === "checkbox"
-    ? (control as HTMLInputElement).checked
-    : control.value;
+  return isCheckboxControl(control) ? control.checked : control.value;
 }
 
 export class PreferencesController {
@@ -108,6 +116,7 @@ export class PreferencesController {
   private workspace?: WorkspaceState;
   private fields: FieldDefinition[] = [];
   private root?: HTMLElement;
+  private savingLocalSettings = false;
 
   constructor(private win: Window) {}
 
@@ -122,11 +131,11 @@ export class PreferencesController {
     this.loadLocalControls();
     this.bindLocalControls();
     this.bindAgentTests();
+    this.bindArtifactImportToken();
     this.bindModeControls();
     this.updateModeVisibility();
     this.workspace = await this.repository.loadWorkspace();
     this.fields = cloneFields(this.workspace.fields);
-    this.renderNativeColumns();
     this.renderFields();
     this.bindWorkspaceActions();
   }
@@ -166,11 +175,7 @@ export class PreferencesController {
         | null;
       if (!control) continue;
       const value = getPref(key);
-      if (
-        control.tagName.toLocaleLowerCase() === "input" &&
-        (control as HTMLInputElement).type === "checkbox"
-      )
-        (control as HTMLInputElement).checked = Boolean(value);
+      if (isCheckboxControl(control)) control.checked = Boolean(value);
       else
         control.value =
           key === "defaultView" && value === "cards"
@@ -183,84 +188,195 @@ export class PreferencesController {
     this.root
       ?.querySelector("#zrdb-pref-save")
       ?.addEventListener("click", () => {
-        if (!this.root) return;
-        try {
-          this.profileFromControls();
-          this.mineruProfileFromControls();
-          for (const key of prefKeys) {
-            const raw = inputValue(this.root, key);
-            const value = [
-              "defaultRowHeight",
-              "agentTimeoutMs",
-              "mineruTimeoutMs",
-            ].includes(key)
-              ? Math.max(0, Number(raw))
-              : raw;
-            setPref(key, value as never);
-          }
-          this.status("已保存本机设置；下一次 Agent 任务会立即使用新配置");
-        } catch (error) {
-          this.status(error instanceof Error ? error.message : String(error));
-        }
+        void this.saveLocalSettings();
       });
     this.root
-      ?.querySelector("#zrdb-backup-export")
+      ?.querySelector("#zrdb-data-root-pick")
       ?.addEventListener("click", () => {
-        void this.exportBackup();
+        void this.pickDataRoot();
       });
     this.root
-      ?.querySelector("#zrdb-backup-import")
+      ?.querySelector("#zrdb-data-root-open")
       ?.addEventListener("click", () => {
-        void this.importBackup();
+        void this.openDataRoot();
+      });
+    this.root
+      ?.querySelector("#zrdb-artifact-root-pick")
+      ?.addEventListener("click", () => {
+        void this.pickArtifactStorageRoot();
+      });
+    this.root
+      ?.querySelector("#zrdb-artifact-root-open")
+      ?.addEventListener("click", () => {
+        void this.openArtifactStorageRoot();
+      });
+    this.root
+      ?.querySelector("#zrdb-artifact-migrate")
+      ?.addEventListener("click", () => {
+        void this.migrateArtifacts();
+      });
+    this.root
+      ?.querySelector("#zrdb-artifact-scan")
+      ?.addEventListener("click", () => {
+        void this.scanArtifacts();
       });
   }
 
-  private async exportBackup(): Promise<void> {
+  private async saveLocalSettings(): Promise<void> {
+    if (!this.root || this.savingLocalSettings) return;
+    this.savingLocalSettings = true;
+    const button =
+      this.root.querySelector<HTMLButtonElement>("#zrdb-pref-save");
+    if (button) button.disabled = true;
     try {
-      this.status("正在生成备份……");
-      const bytes = await createBackupZip();
-      const picker = new this.win.FilePicker();
-      picker.init(this.win, "导出研究数据库备份", picker.modeSave, [
-        ["ZIP 备份 (*.zip)", "*.zip"],
-      ]);
-      picker.defaultString = suggestedBackupFileName();
-      picker.defaultExtension = "zip";
-      const result = await picker.show();
-      if (result !== picker.returnOK && result !== picker.returnReplace) {
-        this.status("已取消导出");
+      this.profileFromControls();
+      this.mineruProfileFromControls();
+      // Initialization is cached; do not reload the file over unsaved edits.
+      await initializePortableSettings();
+      const requestedRoot = String(
+        inputValue(this.root, "dataRoot") || "",
+      ).trim();
+      const previousRoot = String(getPref("dataRoot") || "").trim();
+      for (const key of prefKeys) {
+        if (key === "dataRoot") continue;
+        const raw = inputValue(this.root, key);
+        const value = [
+          "defaultRowHeight",
+          "agentTimeoutMs",
+          "mineruTimeoutMs",
+        ].includes(key)
+          ? Math.max(0, Number(raw))
+          : key === "artifactStorageRoot"
+            ? setArtifactStorageRoot(String(raw))
+            : raw;
+        setPref(key, value as never);
+      }
+      await flushPortableSettings();
+      if (requestedRoot !== previousRoot) setDataRoot(requestedRoot);
+      this.status(
+        requestedRoot !== previousRoot
+          ? "已保存本机设置；研究数据库目录将在重启 Zotero 后切换"
+          : "已保存本机设置",
+      );
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.savingLocalSettings = false;
+      if (button) button.disabled = false;
+    }
+  }
+
+  private async pickDataRoot(): Promise<void> {
+    try {
+      const path = await new addon.data.ztoolkit.FilePicker(
+        "选择研究数据库目录",
+        "folder",
+        undefined,
+        undefined,
+        this.win,
+      ).open();
+      if (!path || Array.isArray(path)) {
+        this.status("已取消选择研究数据库目录");
         return;
       }
-      if (!picker.file) throw new Error("未选择备份保存位置");
-      await (
-        IOUtils as unknown as {
-          write(path: string, data: Uint8Array): Promise<void>;
-        }
-      ).write(picker.file, bytes);
-      this.status(`备份已导出到 ${picker.file}`);
+      const input = this.root?.querySelector<HTMLInputElement>(
+        '[data-pref="dataRoot"]',
+      );
+      if (input) input.value = path;
+      this.status(
+        `已选择研究数据库目录：${path}；请点击“保存本机设置”，重启后生效`,
+      );
     } catch (error) {
       this.status(error instanceof Error ? error.message : String(error));
     }
   }
 
-  private async importBackup(): Promise<void> {
+  private async openDataRoot(): Promise<void> {
     try {
-      const picker = new this.win.FilePicker();
-      picker.init(this.win, "导入研究数据库备份", picker.modeOpen, [
-        ["ZIP 备份 (*.zip)", "*.zip"],
-      ]);
-      const result = await picker.show();
-      if (result !== picker.returnOK || !picker.file) {
-        this.status("已取消导入");
+      const root = getDataRoot();
+      if (!root) throw new Error("请先设置研究数据库目录");
+      await IOUtils.makeDirectory(root, {
+        createAncestors: true,
+        ignoreExisting: true,
+      });
+      await Zotero.launchFile(root);
+      this.status(`已打开研究数据库目录：${root}`);
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async pickArtifactStorageRoot(): Promise<void> {
+    try {
+      const path = await new addon.data.ztoolkit.FilePicker(
+        "选择研究产物根目录",
+        "folder",
+        undefined,
+        undefined,
+        this.win,
+      ).open();
+      if (!path || Array.isArray(path)) {
+        this.status("已取消选择产物根目录");
         return;
       }
-      this.status("正在校验备份……");
-      const bytes = await IOUtils.read(picker.file);
-      const report = await importBackupZip(bytes);
-      this.loadLocalControls();
-      this.workspace = await this.repository.loadWorkspace();
-      this.fields = cloneFields(this.workspace.fields);
-      this.renderFields();
-      this.status(formatImportReport(report));
+      const root = setArtifactStorageRoot(path);
+      const input = this.root?.querySelector<HTMLInputElement>(
+        '[data-pref="artifactStorageRoot"]',
+      );
+      if (input) input.value = root;
+      this.status(`已选择研究产物根目录：${root}；请点击“保存本机设置”`);
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async openArtifactStorageRoot(): Promise<void> {
+    try {
+      const root = await openArtifactStorageDirectory();
+      this.status(`已打开研究产物目录：${root}`);
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async migrateArtifacts(): Promise<void> {
+    try {
+      if (!this.root) return;
+      const value = String(inputValue(this.root, "artifactStorageRoot") || "");
+      setArtifactStorageRoot(value);
+      this.status("正在迁移已有插件产物；主 PDF 不会迁移……");
+      const canonical = getCanonicalArtifactStorageRoot();
+      const legacy = value.trim();
+      const report =
+        canonical && legacy && canonical !== legacy
+          ? await relocateArtifactStorageRoot(
+              legacy,
+              canonical,
+              this.repository,
+            )
+          : await migrateStoredArtifacts(this.repository);
+      const failure = report.failures.length
+        ? `；失败 ${report.failures.length} 项`
+        : "";
+      this.status(
+        `产物迁移完成：迁移 ${report.migrated}，已是 linked file ${report.skipped}，断链 ${report.broken}${failure}`,
+      );
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async scanArtifacts(): Promise<void> {
+    try {
+      const broken = await scanBrokenArtifactLinks();
+      this.status(
+        broken.length
+          ? `断链检测发现 ${broken.length} 个缺失的 linked file：${broken
+              .slice(0, 3)
+              .map((entry) => `${entry.itemKey}/${entry.attachmentKey}`)
+              .join("、")}`
+          : `断链检测完成：未发现问题（产物根目录：${getArtifactStorageRoot() || "未设置"}）`,
+      );
     } catch (error) {
       this.status(error instanceof Error ? error.message : String(error));
     }
@@ -281,6 +397,32 @@ export class PreferencesController {
       ?.querySelector("#zrdb-mineru-test")
       ?.addEventListener("click", () => {
         void this.testMinerU();
+      });
+  }
+
+  private bindArtifactImportToken(): void {
+    const token = this.root?.querySelector<HTMLInputElement>(
+      "#zrdb-artifact-import-token",
+    );
+    const refresh = () => {
+      if (token) token.value = ensureArtifactImportToken();
+    };
+    refresh();
+    this.root
+      ?.querySelector("#zrdb-artifact-token-copy")
+      ?.addEventListener("click", () => {
+        void copyPlainText(
+          token?.value || ensureArtifactImportToken(),
+          this.win.document,
+        ).then((ok) =>
+          this.status(ok ? "接口令牌已复制" : "复制失败，请手动复制"),
+        );
+      });
+    this.root
+      ?.querySelector("#zrdb-artifact-token-rotate")
+      ?.addEventListener("click", () => {
+        if (token) token.value = rotateArtifactImportToken();
+        this.status("接口令牌已轮换；旧令牌立即失效");
       });
   }
 
@@ -408,26 +550,6 @@ export class PreferencesController {
     });
   }
 
-  private renderNativeColumns(): void {
-    const container = this.root?.querySelector<HTMLElement>(
-      "#zrdb-native-columns",
-    );
-    if (!container) return;
-    container.replaceChildren();
-    for (const [id, name] of nativeColumns) {
-      const row = this.win.document.createElement("div");
-      row.className = "zrdb-pref-native-column";
-      const label = this.win.document.createElement("strong");
-      label.textContent = name;
-      const code = this.win.document.createElement("code");
-      code.textContent = id;
-      const badge = this.win.document.createElement("span");
-      badge.textContent = "Zotero 元数据 · 只读定义";
-      row.append(label, code, badge);
-      container.append(row);
-    }
-  }
-
   private renderFields(): void {
     const container =
       this.root?.querySelector<HTMLElement>("#zrdb-fields-list");
@@ -469,13 +591,6 @@ export class PreferencesController {
       field.extraction.instruction = prompt.value;
       field.extraction.templateVersion += 1;
     });
-    const language = this.textInput(
-      field.extraction.outputLanguage,
-      "输出语言",
-      (value) => {
-        field.extraction.outputLanguage = value;
-      },
-    );
     const enabledLabel = this.win.document.createElement("label");
     const enabled = this.win.document.createElement("input");
     enabled.type = "checkbox";
@@ -505,26 +620,9 @@ export class PreferencesController {
       field.archived = !field.archived;
       this.renderFields();
     });
-    for (const control of [
-      name,
-      type,
-      description,
-      prompt,
-      language,
-      enabled,
-      options,
-    ])
+    for (const control of [name, type, description, prompt, enabled, options])
       control.disabled = Boolean(field.archived);
-    row.append(
-      name,
-      type,
-      description,
-      prompt,
-      language,
-      enabledLabel,
-      options,
-      archive,
-    );
+    row.append(name, type, description, prompt, enabledLabel, options, archive);
     return row;
   }
 
@@ -554,7 +652,6 @@ export class PreferencesController {
           extraction: {
             enabled: false,
             instruction: "",
-            outputLanguage: "中文",
             templateVersion: 1,
           },
         });
@@ -565,11 +662,6 @@ export class PreferencesController {
       ?.addEventListener("click", () => {
         void this.saveFields();
       });
-    this.root
-      ?.querySelector("#zrdb-reset-layout")
-      ?.addEventListener("click", () => {
-        void this.resetLayouts();
-      });
   }
 
   private async saveFields(): Promise<void> {
@@ -579,27 +671,15 @@ export class PreferencesController {
       this.status("字段名称不能为空");
       return;
     }
-    const next = { ...this.workspace, fields: cloneFields(this.fields) };
-    await this.repository.saveWorkspace(next);
-    this.workspace = next;
-    this.status("字段方案已保存到 Zotero 工作区");
-  }
-
-  private async resetLayouts(): Promise<void> {
-    if (!this.workspace) return;
-    const next = {
-      ...this.workspace,
-      views: this.workspace.views.map((view) => ({
-        ...view,
-        visibleColumnIDs: createDefaultLayout().visibleColumnIDs,
-        layout: createDefaultLayout(),
-        updatedAt: new Date().toISOString(),
-      })),
-    };
-    await this.repository.saveWorkspace(next);
-    this.workspace = next;
-    setPref("defaultRowHeight", 320);
-    this.loadLocalControls();
-    this.status("所有已保存视图已恢复默认布局；论文字段值没有改变");
+    try {
+      // The table may have saved a layout while preferences remained open.
+      const latest = await this.repository.loadWorkspace();
+      const next = { ...latest, fields: cloneFields(this.fields) };
+      await this.repository.saveWorkspace(next);
+      this.workspace = next;
+      this.status("字段方案已保存到本机研究数据库");
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
   }
 }

@@ -1,7 +1,8 @@
 import React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { config } from "../../package.json";
-import { ResearchRepository, WORKSPACE_TITLE } from "../storage/repository";
+import { WORKSPACE_TITLE } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
 import {
   ResearchDatabaseApp,
   type DatabaseViewMode,
@@ -28,7 +29,10 @@ export class MainViewController {
   private customPane?: HTMLDivElement;
   private nativePane?: Element;
   private itemsContainer?: HTMLElement;
-  private toggleButton?: HTMLButtonElement;
+  private toggleButton?: Element;
+  private togglePositionObserverID?: symbol;
+  private toggleVisibilityFrame?: number;
+  private paneResizeObserver?: ResizeObserver;
   private refreshListener?: () => void;
   private sourceChangeListener?: EventListener;
   private collectionSelectionBinding?: {
@@ -44,7 +48,7 @@ export class MainViewController {
   private nativeArtifactVisibility?: NativeArtifactVisibilityController;
   private libraryTabActive = true;
   private mode: ViewMode = "default";
-  private repository = new ResearchRepository();
+  private repository = getResearchRepository();
 
   constructor(private win: _ZoteroTypes.MainWindow) {}
 
@@ -63,7 +67,8 @@ export class MainViewController {
     this.itemsContainer = container;
     // Keep Zotero's middle pane as the flex sizing authority. The custom view
     // is an overlay inside it, so switching views cannot change the width of
-    // the collection tree or the item-details pane.
+    // the collection tree or the item-details pane. Only cover the item list,
+    // not its container: Zotero also puts the native toolbar in that container.
     container.classList.add("zrdb-items-pane-container");
     if (!doc.getElementById(`${config.addonRef}-stylesheet`)) {
       const link = doc.createElementNS(
@@ -77,21 +82,14 @@ export class MainViewController {
     }
 
     toolbar.classList.add("zrdb-has-view-toggle");
-    this.toggleButton = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "button",
-    ) as HTMLButtonElement;
-    this.toggleButton.id = `${config.addonRef}-view-toggle`;
-    this.toggleButton.className = "zrdb-view-toggle";
-    this.toggleButton.type = "button";
-    this.toggleButton.append(
-      createViewIcon(doc, "table", "table"),
-      createViewIcon(doc, "default", "default"),
+    this.toggleButton = this.createToggleButton(doc);
+    this.placeToggleButton();
+    this.scheduleToggleVisibilityCheck();
+    this.togglePositionObserverID = Zotero.Prefs.registerObserver(
+      `${config.prefsPrefix}.viewTogglePosition`,
+      () => this.placeToggleButton(),
+      true,
     );
-    this.toggleButton.addEventListener("click", () =>
-      this.setMode(this.mode === "default" ? "table" : "default"),
-    );
-    toolbar.appendChild(this.toggleButton);
 
     this.customPane = doc.createElementNS(
       "http://www.w3.org/1999/xhtml",
@@ -102,6 +100,13 @@ export class MainViewController {
     this.customPane.hidden = true;
     container.appendChild(this.customPane);
     this.root = createRoot(this.customPane);
+    const paneResizeObserver = new this.win.ResizeObserver(() => {
+      this.updateCustomPaneBounds();
+      this.scheduleToggleVisibilityCheck();
+    });
+    paneResizeObserver.observe(container);
+    paneResizeObserver.observe(this.nativePane);
+    this.paneResizeObserver = paneResizeObserver;
 
     this.libraryTabActive = isLibraryTabType(this.win.Zotero_Tabs.selectedType);
     this.nativeArtifactVisibility = new NativeArtifactVisibilityController(
@@ -174,40 +179,233 @@ export class MainViewController {
     }
     this.nativeArtifactVisibility?.destroy();
     this.nativeArtifactVisibility = undefined;
+    if (this.togglePositionObserverID) {
+      Zotero.Prefs.unregisterObserver(this.togglePositionObserverID);
+      this.togglePositionObserverID = undefined;
+    }
+    if (this.toggleVisibilityFrame !== undefined) {
+      this.win.cancelAnimationFrame(this.toggleVisibilityFrame);
+      this.toggleVisibilityFrame = undefined;
+    }
+    this.paneResizeObserver?.disconnect();
+    this.paneResizeObserver = undefined;
     this.destroySourceChangeListeners();
     this.cancelScheduledRefresh();
     this.setNativePaneHidden(false);
     this.root?.unmount();
     this.toggleButton?.remove();
-    this.win.document
-      .querySelector("#zotero-items-toolbar")
-      ?.classList.remove("zrdb-has-view-toggle");
+    const toolbar = this.win.document.querySelector("#zotero-items-toolbar");
+    toolbar?.classList.remove(
+      "zrdb-has-view-toggle",
+      "zrdb-has-html-view-toggle",
+    );
+    toolbar?.removeAttribute("data-zrdb-toggle-position");
     this.itemsContainer?.classList.remove("zrdb-items-pane-container");
     this.customPane?.remove();
     this.win.document.getElementById(`${config.addonRef}-stylesheet`)?.remove();
   }
 
+  /**
+   * Use Zotero 9's XUL creation API instead of createElementNS(). The latter
+   * can produce a DOM node that exists but never receives a XUL frame.
+   */
+  private createToggleButton(doc: Document): Element {
+    const button = doc.createXULElement("toolbarbutton");
+    this.configureToggleButton(button, "native");
+    return button;
+  }
+
+  /**
+   * A visible HTML control is safer than leaving users stranded in the custom
+   * view if a host theme or a future Zotero toolbar fails to lay out XUL nodes.
+   */
+  private createHtmlToggleButton(doc: Document): HTMLButtonElement {
+    const button = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "button",
+    ) as HTMLButtonElement;
+    button.type = "button";
+    button.append(
+      createViewIcon(doc, "table", "table"),
+      createViewIcon(doc, "default", "default"),
+    );
+    this.configureToggleButton(button, "html-fallback");
+    return button;
+  }
+
+  private configureToggleButton(
+    button: Element,
+    kind: "native" | "html-fallback",
+  ): void {
+    button.id = `${config.addonRef}-view-toggle`;
+    button.classList.add("zrdb-view-toggle");
+    button.setAttribute("data-toggle-kind", kind);
+    if (kind === "native") {
+      // Match Zotero's own toolbarbutton styling and let XUL render the icon.
+      button.classList.add("zotero-tb-button");
+      button.setAttribute("tabindex", "-1");
+    }
+    // XUL's command covers both real mouse and keyboard activation (and
+    // .click()). Listening to click as well would toggle twice for one action.
+    button.addEventListener(kind === "native" ? "command" : "click", () =>
+      this.setMode(this.mode === "default" ? "table" : "default"),
+    );
+    this.updateToggleButton(button);
+  }
+
+  private toggleIconURI(mode = this.mode): string {
+    const icon = mode === "default" ? "view-table.svg" : "view-list.svg";
+    return `${rootURI}content/icons/${icon}`;
+  }
+
+  private updateToggleButton(button = this.toggleButton): void {
+    if (!button) return;
+    const label =
+      this.mode === "default" ? "切换到数据库表格" : "返回 Zotero 默认列表";
+    button.setAttribute("data-mode", this.mode);
+    button.setAttribute("data-tooltip", label);
+    button.setAttribute("tooltiptext", label);
+    button.setAttribute("title", label);
+    button.setAttribute("aria-label", label);
+    button.classList.toggle("active", this.mode === "table");
+    button.setAttribute(
+      "aria-pressed",
+      this.mode === "table" ? "true" : "false",
+    );
+    if (button.getAttribute("data-toggle-kind") === "native") {
+      button.setAttribute("image", this.toggleIconURI());
+    }
+  }
+
+  private scheduleToggleVisibilityCheck(): void {
+    const nativeButton = this.toggleButton;
+    if (
+      nativeButton?.getAttribute("data-toggle-kind") !== "native" ||
+      this.toggleVisibilityFrame !== undefined
+    )
+      return;
+    this.toggleVisibilityFrame = this.win.requestAnimationFrame(() => {
+      this.toggleVisibilityFrame = undefined;
+      if (this.toggleButton !== nativeButton || !nativeButton.isConnected)
+        return;
+      // Reader tabs hide the entire library. That is not a broken XUL frame;
+      // retry when its observed item pane is laid out again instead.
+      const toolbar = nativeButton.parentElement?.getBoundingClientRect();
+      if (!toolbar?.width || !toolbar.height) return;
+      const bounds = nativeButton.getBoundingClientRect();
+      if (bounds.width > 0 && bounds.height > 0) {
+        const viewport = {
+          left: 0,
+          top: 0,
+          right: this.win.innerWidth,
+          bottom: this.win.innerHeight,
+        };
+        const visibleLeft = Math.max(toolbar.left, viewport.left);
+        const visibleTop = Math.max(toolbar.top, viewport.top);
+        const visibleRight = Math.min(toolbar.right, viewport.right);
+        const visibleBottom = Math.min(toolbar.bottom, viewport.bottom);
+        const centerX =
+          (Math.max(bounds.left, visibleLeft) +
+            Math.min(bounds.right, visibleRight)) /
+          2;
+        const centerY =
+          (Math.max(bounds.top, visibleTop) +
+            Math.min(bounds.bottom, visibleBottom)) /
+          2;
+        const hit =
+          visibleRight > visibleLeft && visibleBottom > visibleTop
+            ? this.win.document.elementFromPoint(centerX, centerY)
+            : null;
+        if (
+          bounds.left >= visibleLeft &&
+          bounds.right <= visibleRight &&
+          bounds.top >= visibleTop &&
+          bounds.bottom <= visibleBottom &&
+          (hit === nativeButton || nativeButton.contains(hit))
+        )
+          return;
+      }
+
+      debugLog("native view toggle had no layout; using HTML fallback", {
+        width: bounds.width,
+        height: bounds.height,
+      });
+      const fallback = this.createHtmlToggleButton(this.win.document);
+      nativeButton.replaceWith(fallback);
+      this.toggleButton = fallback;
+      this.placeToggleButton();
+      this.updateToggleButton();
+    });
+  }
+
+  /**
+   * Insert the toggle at the start or at the visible right edge of
+   * `#zotero-items-toolbar` based on the `viewTogglePosition` preference
+   * ("left" | "right", default "right").
+   */
+  private placeToggleButton(): void {
+    if (!this.toggleButton) return;
+    const toolbar = this.win.document.querySelector("#zotero-items-toolbar");
+    if (!toolbar) return;
+    const position = this.togglePosition();
+    toolbar.setAttribute("data-zrdb-toggle-position", position);
+    toolbar.classList.toggle(
+      "zrdb-has-html-view-toggle",
+      this.toggleButton.getAttribute("data-toggle-kind") === "html-fallback",
+    );
+    if (position === "left") {
+      if (toolbar.firstElementChild !== this.toggleButton)
+        toolbar.insertBefore(this.toggleButton, toolbar.firstElementChild);
+    } else {
+      // Zotero keeps a fixed pane-layout button at the end of this hbox. Put
+      // our control immediately before it so the button stays in the primary
+      // visible toolbar area instead of being clipped after the trailing
+      // control when the window is narrow or the toolbar is customized.
+      const anchor = toolbar.querySelector(
+        "#zotero-tb-toggle-item-pane-stacked",
+      );
+      if (anchor && anchor !== this.toggleButton) {
+        if (anchor.previousElementSibling !== this.toggleButton)
+          toolbar.insertBefore(this.toggleButton, anchor);
+      } else if (toolbar.lastElementChild !== this.toggleButton) {
+        toolbar.appendChild(this.toggleButton);
+      }
+    }
+  }
+
+  private togglePosition(): "left" | "right" {
+    return String(getPref("viewTogglePosition") || "right") === "left"
+      ? "left"
+      : "right";
+  }
+
   setMode(mode: ViewMode): void {
     this.mode = mode;
     setPref("lastViewMode", mode);
+    this.updateToggleButton();
     if (!this.nativePane || !this.customPane) return;
     const custom = mode !== "default";
+    this.updateCustomPaneBounds();
     this.setNativePaneHidden(custom);
     this.customPane.hidden = !custom;
-    if (this.toggleButton) {
-      const label =
-        mode === "default" ? "切换到数据库表格" : "返回 Zotero 默认列表";
-      this.toggleButton.dataset.mode = mode;
-      this.toggleButton.dataset.tooltip = label;
-      this.toggleButton.title = label;
-      this.toggleButton.setAttribute("aria-label", label);
-      this.toggleButton.classList.toggle("active", mode === "table");
-      this.toggleButton.setAttribute(
-        "aria-pressed",
-        mode === "table" ? "true" : "false",
-      );
-    }
     if (custom && this.libraryTabActive) this.scheduleRefresh();
+  }
+
+  private updateCustomPaneBounds(): void {
+    if (!this.nativePane || !this.itemsContainer || !this.customPane) return;
+    const native = this.nativePane.getBoundingClientRect();
+    if (!native.width || !native.height) return;
+    const container = this.itemsContainer.getBoundingClientRect();
+    // Absolute offsets are relative to the container's padding box. Keep the
+    // native pane in flow and mirror it after toolbar/theme/splitter changes.
+    const { clientLeft, clientTop, scrollLeft, scrollTop } =
+      this.itemsContainer;
+    Object.assign(this.customPane.style, {
+      left: `${native.left - container.left - clientLeft + scrollLeft}px`,
+      top: `${native.top - container.top - clientTop + scrollTop}px`,
+      width: `${native.width}px`,
+      height: `${native.height}px`,
+    });
   }
 
   private setNativePaneHidden(hidden: boolean): void {
@@ -404,10 +602,30 @@ export class MainViewController {
    * view after it has actually returned to the library tab.
    */
   private ensureLibraryTabIsActive(): boolean {
-    if (this.libraryTabActive) return true;
-    if (!isLibraryTabType(this.win.Zotero_Tabs.selectedType)) return false;
-    this.libraryTabActive = true;
-    if (this.mode !== "default") this.scheduleSourceRefresh();
+    // The selected tab is authoritative even when a bootstrap notifier was
+    // missed. This prevents a stale `libraryTabActive` flag from rendering
+    // after the user has already switched into a reader tab.
+    let selectedType: unknown;
+    try {
+      selectedType = this.win.Zotero_Tabs.selectedType;
+    } catch (error) {
+      debugLog("unable to read selected tab type", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return this.libraryTabActive;
+    }
+    // During very early Zotero startup the tab manager can exist before it has
+    // populated a selected type. Preserve the initial library assumption until
+    // an authoritative non-empty type is available.
+    if (selectedType == null) return this.libraryTabActive;
+    if (!isLibraryTabType(selectedType)) {
+      this.libraryTabActive = false;
+      return false;
+    }
+    if (!this.libraryTabActive) {
+      this.libraryTabActive = true;
+      if (this.mode !== "default") this.scheduleSourceRefresh();
+    }
     return true;
   }
 

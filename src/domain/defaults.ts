@@ -78,7 +78,6 @@ export function createDefaultFields(): FieldDefinition[] {
     extraction: {
       enabled: true,
       instruction: prompt,
-      outputLanguage: "中文",
       templateVersion: id === TRANSLATED_TITLE_FIELD_ID ? 1 : 2,
     },
   }));
@@ -123,6 +122,10 @@ export function createDefaultLayout(): ViewLayout {
       "figureGallery",
       "url",
       "tags",
+      "research-question",
+      "research-significance",
+      "research-value",
+      "research-outcomes",
     ],
     columnLabels: {},
     cellColors: {},
@@ -167,7 +170,7 @@ export function normalizeViewLayout(value?: Partial<ViewLayout>): ViewLayout {
 
 export function createDefaultWorkspace(): WorkspaceState {
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     fields: createDefaultFields(),
     views: [],
     comparisons: [],

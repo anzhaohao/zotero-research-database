@@ -39,6 +39,7 @@ const workspaceSchema = z.object({
     z.literal(11),
     z.literal(12),
     z.literal(13),
+    z.literal(14),
   ]),
   fields: z.array(z.unknown()),
   // Accepted only so version 0.1 workspaces can be migrated without touching
@@ -115,7 +116,6 @@ export function buildWorkspaceNote(state: WorkspaceState): string {
 
 export function parseWorkspacePayload(payload: unknown): WorkspaceState {
   const parsed = workspaceSchema.parse(payload);
-  const migrating = parsed.schemaVersion < 9;
   const fields = parsed.fields.map(normalizeFieldDefinition);
   if (parsed.schemaVersion === 10) migrateUntouchedBuiltinPrompts(fields);
   if (!fields.some((field) => field.id === TRANSLATED_TITLE_FIELD_ID)) {
@@ -126,39 +126,18 @@ export function parseWorkspacePayload(payload: unknown): WorkspaceState {
     );
   }
   return {
-    schemaVersion: 13,
+    schemaVersion: 14,
     fields,
     // 0.2 views did not have display-column metadata. Upgrade only old
     // workspaces so current data keeps its exact shape for a lossless round
     // trip, while old workspaces receive the new defaults.
     views: parsed.views.map((view) => {
-      if (migrating) return normalizeView(view, parsed.schemaVersion);
-      const current = {
-        ...(view as WorkspaceState["views"][number]),
+      const current = normalizeView(view, parsed.schemaVersion, fields);
+      const normalizedCurrent = {
+        ...current,
         // 0.3.15 removed the card renderer. Retain its name and layout while
         // exposing it as a table view.
         mode: "table" as const,
-      };
-      const allowedFigureKinds = new Set(["figure", "table", "formula"]);
-      const viewFigureKinds = Array.isArray((current as any).figureKinds)
-        ? (current as any).figureKinds.filter((kind: unknown) =>
-            allowedFigureKinds.has(String(kind)),
-          )
-        : undefined;
-      const layoutFigureKinds = Array.isArray(
-        (current.layout as any)?.figureKinds,
-      )
-        ? (current.layout as any).figureKinds.filter((kind: unknown) =>
-            allowedFigureKinds.has(String(kind)),
-          )
-        : undefined;
-      const normalizedCurrent = {
-        ...current,
-        ...(viewFigureKinds ? { figureKinds: viewFigureKinds } : {}),
-        layout: {
-          ...current.layout,
-          ...(layoutFigureKinds ? { figureKinds: layoutFigureKinds } : {}),
-        },
       };
       if (current.id !== "builtin-table") return normalizedCurrent;
       // Upgrade only untouched built-in defaults. Saved views and every
@@ -203,7 +182,8 @@ export function parseWorkspacePayload(payload: unknown): WorkspaceState {
 
 function normalizeView(
   value: unknown,
-  sourceVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13,
+  sourceVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14,
+  fields: readonly FieldDefinition[],
 ): WorkspaceState["views"][number] {
   const raw = (value || {}) as Record<string, any>;
   const defaults = createDefaultLayout();
@@ -211,9 +191,39 @@ function normalizeView(
   const rawOrder = Array.isArray(rawLayout.columnOrder)
     ? rawLayout.columnOrder.map(String)
     : defaults.columnOrder;
-  const rawVisible = Array.isArray(rawLayout.visibleColumnIDs)
+  const rawLayoutVisible = Array.isArray(rawLayout.visibleColumnIDs)
     ? rawLayout.visibleColumnIDs.map(String)
-    : defaults.visibleColumnIDs;
+    : undefined;
+  const rawViewVisible = Array.isArray(raw.visibleColumnIDs)
+    ? raw.visibleColumnIDs.map(String)
+    : undefined;
+  const legacyFieldIDs = Array.isArray(raw.visibleFieldIDs)
+    ? raw.visibleFieldIDs.map(String)
+    : undefined;
+  const fieldIDs = new Set(fields.map((field) => field.id));
+  const defaultFieldIDs = fields
+    .filter(
+      (field) => !field.archived && field.id !== TRANSLATED_TITLE_FIELD_ID,
+    )
+    .map((field) => field.id);
+  // The old table read native visibility from the layout and custom visibility
+  // from visibleFieldIDs. Prefer the layout over its redundant view-level copy;
+  // an explicit empty list is intentional and must never mean “show all”.
+  const nativeVisible = rawLayoutVisible ?? rawViewVisible;
+  const rawVisible =
+    sourceVersion >= 14
+      ? (nativeVisible ?? [...defaults.visibleColumnIDs, ...defaultFieldIDs])
+      : nativeVisible?.length === 0
+        ? []
+        : [
+            ...(nativeVisible ?? defaults.visibleColumnIDs).filter(
+              (id: string) => !fieldIDs.has(id),
+            ),
+            ...(legacyFieldIDs ??
+              (nativeVisible?.some((id: string) => fieldIDs.has(id))
+                ? nativeVisible.filter((id: string) => fieldIDs.has(id))
+                : defaultFieldIDs)),
+          ];
   const addFigureGallery = sourceVersion === 2;
   const legacyBuiltInHeight =
     raw.id === "builtin-table" &&
@@ -260,7 +270,9 @@ function normalizeView(
         : defaults.rowHeight,
     rowHeights: { ...(rawLayout.rowHeights || {}) },
     visibleColumnIDs:
-      addFigureGallery && !rawVisible.includes("figureGallery")
+      addFigureGallery &&
+      rawVisible.length > 0 &&
+      !rawVisible.includes("figureGallery")
         ? [...rawVisible, "figureGallery"]
         : rawVisible,
     columnLabels: { ...(rawLayout.columnLabels || {}) },
@@ -272,22 +284,9 @@ function normalizeView(
       ? rawLayout.citationStyle
       : defaults.citationStyle,
     pinnedColumnIDs,
-    ...(figureKinds(rawLayout.figureKinds)
-      ? { figureKinds: figureKinds(rawLayout.figureKinds) }
-      : {}),
   };
-  const rawViewVisible = Array.isArray(raw.visibleColumnIDs)
-    ? raw.visibleColumnIDs.map(String)
-    : layout.visibleColumnIDs;
-  let visibleColumnIDs =
-    addFigureGallery && !rawViewVisible.includes("figureGallery")
-      ? [...rawViewVisible, "figureGallery"]
-      : rawViewVisible;
-  if (visibleColumnIDs.includes("basicInfo"))
-    visibleColumnIDs = visibleColumnIDs.filter(
-      (columnID) => !["creators", "year", "date", "DOI"].includes(columnID),
-    );
-  if (layout.visibleColumnIDs.includes("basicInfo"))
+  delete (layout as Record<string, unknown>).figureKinds;
+  if (sourceVersion < 9 && layout.visibleColumnIDs.includes("basicInfo"))
     layout.visibleColumnIDs = layout.visibleColumnIDs.filter(
       (columnID) => !["creators", "year", "date", "DOI"].includes(columnID),
     );
@@ -297,15 +296,11 @@ function normalizeView(
     // Card views were removed in 0.3.15. Preserve their layout and expose
     // them as table views instead of discarding the user's saved view.
     mode: "table",
-    visibleFieldIDs: Array.isArray(raw.visibleFieldIDs)
-      ? raw.visibleFieldIDs.map(String)
-      : [],
-    visibleColumnIDs,
-    ...(figureKinds(raw.figureKinds)
-      ? { figureKinds: figureKinds(raw.figureKinds) }
+    ...(figureKinds(raw.figureKinds || rawLayout.figureKinds)
+      ? { figureKinds: figureKinds(raw.figureKinds || rawLayout.figureKinds) }
       : {}),
-    sortBy: raw.sortBy,
-    groupBy: raw.groupBy,
+    ...(raw.sortBy ? { sortBy: raw.sortBy } : {}),
+    ...(raw.groupBy ? { groupBy: raw.groupBy } : {}),
     filterText: String(raw.filterText || ""),
     layout,
     createdAt: String(raw.createdAt || new Date().toISOString()),
@@ -363,9 +358,13 @@ function normalizeFieldDefinition(value: unknown): FieldDefinition {
       instruction: String(
         extraction.instruction ?? legacy.prompt ?? field.description ?? "",
       ),
-      outputLanguage: String(
-        extraction.outputLanguage ?? legacy.outputLanguage ?? "中文",
-      ),
+      ...((extraction.outputLanguage ?? legacy.outputLanguage)
+        ? {
+            outputLanguage: String(
+              extraction.outputLanguage ?? legacy.outputLanguage,
+            ),
+          }
+        : {}),
       templateVersion: Number(
         extraction.templateVersion ?? legacy.templateVersion ?? 1,
       ),

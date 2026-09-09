@@ -111,7 +111,7 @@ export class NativeArtifactVisibilityController {
     const manifests = await Promise.all(
       parents.map(async (parent) => {
         try {
-          return await this.repository.loadArtifacts(parent);
+          return await this.repository.loadAllArtifacts(parent);
         } catch (error) {
           Zotero.logError(
             error instanceof Error ? error : new Error(String(error)),

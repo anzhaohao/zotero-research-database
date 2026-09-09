@@ -1,28 +1,29 @@
 import { assert } from "chai";
-import { config } from "../package.json";
+import { clickControl } from "../uiHelpers";
+import { config } from "../../package.json";
 import {
   CodexAgentBridge,
   HanaAgentBridge,
-} from "../src/services/externalAgent";
-import { importArtifacts } from "../src/services/artifactEndpoint";
-import { TRANSLATED_TITLE_FIELD_ID } from "../src/domain/defaults";
-import { ResearchRepository } from "../src/storage/repository";
-import { migrateLegacyInternalTags } from "../src/services/artifactMetadata";
-import { setPref } from "../src/utils/prefs";
-import type { ItemInternalState } from "../src/domain/types";
+} from "../../src/services/externalAgent";
+import { importArtifacts } from "../../src/services/artifactEndpoint";
+import { TRANSLATED_TITLE_FIELD_ID } from "../../src/domain/defaults";
+import { ResearchRepository } from "../../src/storage/repository";
+import { migrateLegacyInternalTags } from "../../src/services/artifactMetadata";
+import { setPref } from "../../src/utils/prefs";
+import type { ItemInternalState } from "../../src/domain/types";
 import {
   writeArtifactExtra,
   writeFigureExtra,
   writePrimaryPdfExtra,
   writeRecordExtra,
-} from "../src/core/extraProperties";
-import { createEmptyRecord, setManualValue } from "../src/core/records";
-import { mineruResultFromDirectory } from "../src/services/mineru";
+} from "../../src/core/extraProperties";
+import { createEmptyRecord, setManualValue } from "../../src/core/records";
+import { mineruResultFromDirectory } from "../../src/services/mineru";
 import {
   clearPdfThumbnailCache,
   getPdfPageCount,
   getPdfThumbnail,
-} from "../src/services/pdfThumbnail";
+} from "../../src/services/pdfThumbnail";
 
 function minimalPdfBytes(): Uint8Array {
   const objects = [
@@ -153,6 +154,13 @@ describe("startup", function () {
   });
 
   it("should reach the local HanaAgent from the Zotero sandbox", async function () {
+    if (
+      !Zotero.Prefs.get(
+        "extensions.zotero-research-database.test.externalAgentEnabled",
+        true,
+      )
+    )
+      this.skip();
     const serverInfo = "C:\\Users\\anzhaofeng\\.hanako\\server-info.json";
     if (!(await IOUtils.exists(serverInfo))) this.skip();
     let result: Awaited<ReturnType<HanaAgentBridge["probe"]>>;
@@ -187,6 +195,13 @@ describe("startup", function () {
 
   it("should complete a HanaAgent WebSocket JSON round-trip in the Zotero sandbox", async function () {
     this.timeout(120_000);
+    if (
+      !Zotero.Prefs.get(
+        "extensions.zotero-research-database.test.externalAgentEnabled",
+        true,
+      )
+    )
+      this.skip();
     const serverInfo = "C:\\Users\\anzhaofeng\\.hanako\\server-info.json";
     if (!(await IOUtils.exists(serverInfo))) this.skip();
     const bridge = new HanaAgentBridge({
@@ -282,7 +297,7 @@ describe("startup", function () {
     const customPane = doc.querySelector<HTMLElement>(
       `#${config.addonRef}-custom-pane`,
     );
-    const toggleButton = doc.querySelector<HTMLButtonElement>(
+    const toggleButton = doc.querySelector<HTMLElement>(
       `#${config.addonRef}-view-toggle`,
     );
     assert.exists(nativePane);
@@ -296,27 +311,48 @@ describe("startup", function () {
       .map((selector) => doc.querySelector<HTMLElement>(selector))
       .filter((pane): pane is HTMLElement => Boolean(pane))
       .map((pane) => ({ pane, width: pane.getBoundingClientRect().width }));
-    assert.equal(toggleButton!.tagName.toLowerCase(), "button");
+    const initialToggleRect = toggleButton!.getBoundingClientRect();
+    assert.isAbove(initialToggleRect.width, 0, "view toggle width");
+    assert.isAbove(initialToggleRect.height, 0, "view toggle height");
+    const nativeToggle = toggleButton!.localName === "toolbarbutton";
+    assert.oneOf(toggleButton!.localName, ["toolbarbutton", "button"]);
+    assert.equal(toggleButton!.getAttribute("data-mode"), "default");
     assert.notExists(doc.querySelector(`#${config.addonRef}-view-switcher`));
     assert.notExists(doc.querySelector('[data-mode="cards"]'));
     const errorsBefore = ((Zotero as any).getErrors?.(true) || []) as string[];
 
-    const tableIcon = toggleButton!.querySelector<SVGSVGElement>(
-      '[data-toggle-icon="table"]',
-    );
-    const defaultIcon = toggleButton!.querySelector<SVGSVGElement>(
-      '[data-toggle-icon="default"]',
-    );
-    assert.exists(tableIcon);
-    assert.exists(defaultIcon);
-    for (const icon of [tableIcon!, defaultIcon!]) {
-      assert.equal(icon.namespaceURI, "http://www.w3.org/2000/svg");
-      assert.equal(icon.getAttribute("stroke"), "currentColor");
-      assert.isAbove(icon.getBoundingClientRect().width, 0);
-      assert.notEqual(win.getComputedStyle(icon).stroke, "none");
+    if (nativeToggle) {
+      assert.equal(
+        toggleButton!.namespaceURI,
+        "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul",
+      );
+      assert.equal(toggleButton!.getAttribute("data-toggle-kind"), "native");
+      assert.include(
+        toggleButton!.getAttribute("image") || "",
+        "view-table.svg",
+      );
+    } else {
+      assert.equal(
+        toggleButton!.getAttribute("data-toggle-kind"),
+        "html-fallback",
+      );
+      const tableIcon = toggleButton!.querySelector<SVGSVGElement>(
+        '[data-toggle-icon="table"]',
+      );
+      const defaultIcon = toggleButton!.querySelector<SVGSVGElement>(
+        '[data-toggle-icon="default"]',
+      );
+      assert.exists(tableIcon);
+      assert.exists(defaultIcon);
+      for (const icon of [tableIcon!, defaultIcon!]) {
+        assert.equal(icon.namespaceURI, "http://www.w3.org/2000/svg");
+        assert.equal(icon.getAttribute("stroke"), "currentColor");
+        assert.isAbove(icon.getBoundingClientRect().width, 0);
+        assert.notEqual(win.getComputedStyle(icon).stroke, "none");
+      }
     }
 
-    toggleButton!.click();
+    clickControl(win, toggleButton!);
     for (let attempt = 0; attempt < 40; attempt++) {
       if (customPane!.querySelector(".zrdb-app")) break;
       await Zotero.Promise.delay(50);
@@ -325,8 +361,14 @@ describe("startup", function () {
     const newErrors = (
       ((Zotero as any).getErrors?.(true) || []) as string[]
     ).slice(errorsBefore.length);
-    assert.isFalse(nativePane!.hasAttribute("hidden"));
-    assert.isFalse(customPane!.hidden);
+    assert.isFalse(
+      nativePane!.hasAttribute("hidden"),
+      "native pane keeps its layout",
+    );
+    assert.isFalse(
+      customPane!.hidden,
+      "database pane is shown after activation",
+    );
     assert.equal(win.getComputedStyle(nativePane!).visibility, "hidden");
     assert.notEqual(win.getComputedStyle(nativePane!).display, "none");
     assert.notEqual(win.getComputedStyle(customPane!).display, "none");
@@ -350,17 +392,25 @@ describe("startup", function () {
       `custom pane HTML: ${customPane!.innerHTML}; errors: ${JSON.stringify(newErrors)}`,
     );
     assert.isFalse(toggleButton!.hasAttribute("hidden"));
-    assert.equal(toggleButton!.dataset.mode, "table");
+    assert.equal(toggleButton!.getAttribute("data-mode"), "table");
     assert.isTrue(toggleButton!.classList.contains("active"));
+    if (nativeToggle)
+      assert.include(
+        toggleButton!.getAttribute("image") || "",
+        "view-list.svg",
+      );
     const nativeToolbar = doc.querySelector<HTMLElement>(
       "#zotero-items-toolbar",
     );
     assert.exists(nativeToolbar);
     assert.strictEqual(toggleButton!.parentElement, nativeToolbar);
-    assert.equal(win.getComputedStyle(toggleButton!).position, "absolute");
+    if (nativeToggle)
+      assert.notEqual(win.getComputedStyle(toggleButton!).position, "absolute");
+    else assert.equal(win.getComputedStyle(toggleButton!).position, "absolute");
     const toolbarRect = nativeToolbar!.getBoundingClientRect();
     const toggleRect = toggleButton!.getBoundingClientRect();
-    assert.closeTo(toggleRect.left - toolbarRect.left, 270, 3);
+    assert.isAtLeast(toggleRect.left, toolbarRect.left);
+    assert.isAtMost(toggleRect.right, toolbarRect.right);
     const stableToggleLeft = toggleRect.left;
     const actionbar = customPane!.querySelector<HTMLElement>(".zrdb-actionbar");
     const titlebar = customPane!.querySelector<HTMLElement>(".zrdb-titlebar");
@@ -412,7 +462,7 @@ describe("startup", function () {
     assert.notExists(customPane!.querySelector(".zrdb-inline-view-switcher"));
     assert.exists(customPane!.querySelector('[aria-label="视图与导出"]'));
     const toolsTrigger = customPane!.querySelector<HTMLButtonElement>(
-      '[aria-label="字段、列与外部工具"]',
+      '[aria-label="字段与工具"]',
     );
     assert.exists(toolsTrigger, "fields/tools toolbar trigger");
     const firstDatabaseRow =
@@ -420,24 +470,41 @@ describe("startup", function () {
     assert.exists(firstDatabaseRow, "database row for external-tool selection");
     firstDatabaseRow!.click();
     await Zotero.Promise.delay(40);
-    toolsTrigger!.click();
+    const activePane = doc.querySelector<HTMLElement>(
+      `#${config.addonRef}-custom-pane`,
+    )!;
+    const activeToolsTrigger = activePane.querySelector<HTMLButtonElement>(
+      '[aria-label="字段与工具"]',
+    );
+    assert.exists(
+      activeToolsTrigger,
+      "fields/tools toolbar trigger after row selection",
+    );
+    activeToolsTrigger!.click();
     await Zotero.Promise.delay(40);
     const columnVisibilityButton = [
-      ...customPane!.querySelectorAll<HTMLButtonElement>(
+      ...activePane.querySelectorAll<HTMLButtonElement>(
         ".zrdb-toolbar-menu button",
       ),
-    ].find((button) => button.textContent?.includes("字段与列管理"));
+    ].find((button) => button.textContent?.includes("列布局"));
     assert.exists(columnVisibilityButton, "unified field and column entry");
     assert.include(columnVisibilityButton!.textContent || "", "列布局");
     columnVisibilityButton!.click();
     await Zotero.Promise.delay(40);
     const columnVisibilityModal = customPane!.querySelector<HTMLElement>(
-      '.zrdb-modal[aria-label="字段与列管理"]',
+      '.zrdb-modal[aria-label="当前视图列布局"]',
     );
     assert.exists(columnVisibilityModal);
     assert.include(columnVisibilityModal!.textContent || "", "标题");
     assert.include(columnVisibilityModal!.textContent || "", "基础信息");
-    assert.exists(columnVisibilityModal!.querySelector('[role="tablist"]'));
+    assert.notExists(columnVisibilityModal!.querySelector('[role="tablist"]'));
+    assert.notInclude(columnVisibilityModal!.textContent || "", "自定义字段");
+    assert.exists(
+      [
+        ...columnVisibilityModal!.querySelectorAll<HTMLButtonElement>("button"),
+      ].find((button) => button.textContent?.includes("打开字段设置")),
+      "global field definitions have a single settings entry",
+    );
     assert.isAtLeast(
       columnVisibilityModal!.querySelectorAll(".zrdb-column-manager-grip")
         .length,
@@ -510,10 +577,21 @@ describe("startup", function () {
     );
     assert.isBelow(reorderedManagerBasicIndex, reorderedManagerTitleIndex);
     [...columnVisibilityModal!.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.includes("保存字段与列设置"))!
+      .find((button) => button.textContent?.includes("保存列布局"))!
       .click();
     await Zotero.Promise.delay(80);
-    const pinGroup = customPane!.querySelector<HTMLElement>(
+    const pinMenu = [
+      ...customPane!.querySelectorAll<HTMLDetailsElement>(
+        "details.zrdb-menu-submenu",
+      ),
+    ].find(
+      (menu) => menu.querySelector("summary span")?.textContent === "固定列",
+    );
+    assert.exists(pinMenu, "pin choices are grouped in a submenu");
+    assert.isFalse(pinMenu!.open, "pin choices start collapsed");
+    pinMenu!.querySelector<HTMLElement>("summary")!.click();
+    assert.isTrue(pinMenu!.open, "pin choices expand on demand");
+    const pinGroup = pinMenu!.querySelector<HTMLElement>(
       '.zrdb-menu-choice-group[role="group"]',
     );
     assert.exists(pinGroup, "explicit pinned-column choices");
@@ -611,14 +689,27 @@ describe("startup", function () {
       ),
       "unpinning restores the shared columnOrder instead of pin insertion order",
     );
+    const processingMenu = [
+      ...customPane!.querySelectorAll<HTMLDetailsElement>(
+        "details.zrdb-menu-submenu",
+      ),
+    ].find(
+      (menu) => menu.querySelector("summary span")?.textContent === "处理工具",
+    );
+    assert.exists(
+      processingMenu,
+      "processing actions are grouped in a submenu",
+    );
+    assert.isFalse(processingMenu!.open, "processing actions start collapsed");
+    processingMenu!.querySelector<HTMLElement>("summary")!.click();
     const mineruShortcut = [
-      ...customPane!.querySelectorAll<HTMLButtonElement>(".zrdb-menu-item"),
+      ...processingMenu!.querySelectorAll<HTMLButtonElement>(".zrdb-menu-item"),
     ].find((button) => button.textContent?.includes("MinerU 转换"));
     assert.exists(mineruShortcut, "dedicated MinerU conversion menu item");
     mineruShortcut!.click();
     await Zotero.Promise.delay(80);
     let externalToolsDialog = customPane!.querySelector<HTMLElement>(
-      '[role="dialog"][aria-label="Agent、MinerU 与主 PDF"]',
+      '[role="dialog"][aria-label="文献处理"]',
     );
     assert.exists(externalToolsDialog, "MinerU shortcut dialog");
     let toolTabs = [
@@ -626,7 +717,7 @@ describe("startup", function () {
         ".zrdb-tool-tabs button",
       ),
     ];
-    assert.lengthOf(toolTabs, 3);
+    assert.lengthOf(toolTabs, 2);
     assert.strictEqual(
       toolTabs
         .find((button) => button.textContent?.includes("MinerU 转换"))
@@ -638,9 +729,11 @@ describe("startup", function () {
       externalToolsDialog!.querySelectorAll(
         'select option[value="local-client"], select option[value="official-api"], select option[value="self-hosted"]',
       ),
-      3,
+      0,
+      "conversion dialog does not duplicate long-term MinerU configuration",
     );
-    assert.include(externalToolsDialog!.textContent || "", "批量转换选中 1 篇");
+    assert.include(externalToolsDialog!.textContent || "", "转换选中 1 篇");
+    assert.include(externalToolsDialog!.textContent || "", "打开 MinerU 设置");
     assert.include(
       externalToolsDialog!.textContent || "",
       "请在客户端点击“立即解析”",
@@ -650,37 +743,39 @@ describe("startup", function () {
       .click();
     await Zotero.Promise.delay(40);
 
-    const externalToolsItem = [
+    const primaryPdfItem = [
       ...customPane!.querySelectorAll<HTMLButtonElement>(".zrdb-menu-item"),
-    ].find((button) => button.textContent?.includes("Agent、MinerU 与主 PDF"));
-    assert.exists(externalToolsItem, "combined Agent/MinerU menu item");
-    externalToolsItem!.click();
+    ].find((button) => button.textContent?.includes("管理主 PDF"));
+    assert.exists(
+      primaryPdfItem,
+      "per-item main PDF management stays available",
+    );
+    primaryPdfItem!.click();
     await Zotero.Promise.delay(80);
     externalToolsDialog = customPane!.querySelector<HTMLElement>(
-      '[role="dialog"][aria-label="Agent、MinerU 与主 PDF"]',
+      '[role="dialog"][aria-label="文献处理"]',
     );
-    assert.exists(externalToolsDialog, "combined external tools dialog");
+    assert.exists(externalToolsDialog, "current paper processing dialog");
     toolTabs = [
       ...externalToolsDialog!.querySelectorAll<HTMLButtonElement>(
         ".zrdb-tool-tabs button",
       ),
     ];
-    assert.lengthOf(toolTabs, 3);
+    assert.lengthOf(toolTabs, 2);
     assert.strictEqual(
       toolTabs
-        .find((button) => button.textContent?.trim() === "Agent")
+        .find((button) => button.textContent?.includes("主 PDF"))
         ?.getAttribute("aria-pressed"),
       "true",
-      "combined entry opens the Agent tab",
+      "main PDF entry opens per-item PDF management directly",
     );
     assert.lengthOf(
       externalToolsDialog!.querySelectorAll(
         'select option[value="codex-cli"], select option[value="claude-code"], select option[value="hana-agent"], select option[value="ollama"], select option[value="custom-json-process"]',
       ),
-      5,
+      0,
+      "processing dialog does not duplicate Agent configuration",
     );
-    toolTabs.find((button) => button.textContent?.includes("主 PDF"))!.click();
-    await Zotero.Promise.delay(30);
     assert.include(externalToolsDialog!.textContent || "", "转换此篇");
     externalToolsDialog!
       .querySelector<HTMLButtonElement>("header button")!
@@ -694,7 +789,10 @@ describe("startup", function () {
     );
     assert.isTrue(headers.some((label) => label.includes("预览")));
     assert.isTrue(headers.some((label) => label.includes("基础信息")));
-    assert.isFalse(headers.some((label) => label.includes("论文图表")));
+    assert.isTrue(
+      headers.some((label) => label.includes("论文图表")),
+      "default layout includes the figure gallery",
+    );
     assert.isFalse(headers.some((label) => label.trim() === "作者"));
     assert.isFalse(headers.some((label) => label.trim() === "年份"));
     assert.isFalse(headers.some((label) => label.trim() === "日期"));
@@ -1404,15 +1502,23 @@ describe("startup", function () {
       2,
     );
 
-    toggleButton!.click();
+    clickControl(win, toggleButton!);
     await Zotero.Promise.delay(100);
-    assert.isFalse(nativePane!.hasAttribute("hidden"));
+    assert.isFalse(
+      nativePane!.hasAttribute("hidden"),
+      "native pane keeps its layout",
+    );
     assert.isFalse(nativePane!.classList.contains("zrdb-native-pane-hidden"));
     assert.isTrue(customPane!.hidden);
     assert.notEqual(win.getComputedStyle(nativePane!).display, "none");
-    assert.equal(toggleButton!.dataset.mode, "default");
+    assert.equal(toggleButton!.getAttribute("data-mode"), "default");
     assert.isFalse(toggleButton!.classList.contains("active"));
     assert.isFalse(toggleButton!.hasAttribute("hidden"));
+    if (nativeToggle)
+      assert.include(
+        toggleButton!.getAttribute("image") || "",
+        "view-table.svg",
+      );
     assert.closeTo(
       toggleButton!.getBoundingClientRect().left,
       stableToggleLeft,
@@ -1420,6 +1526,53 @@ describe("startup", function () {
     );
     await tableItem.eraseTx();
     await dividerItem.eraseTx();
+  });
+
+  it("keeps the toolbar toggle visible at the configured edge", async function () {
+    const win = Zotero.getMainWindow();
+    assert.exists(win);
+    const doc = win.document;
+    const toolbar = doc.querySelector<HTMLElement>("#zotero-items-toolbar");
+    assert.exists(toolbar);
+    const originalPosition = String(
+      Zotero.Prefs.get(`${config.prefsPrefix}.viewTogglePosition`, true) ||
+        "right",
+    );
+
+    try {
+      setPref("viewTogglePosition", "left");
+      await Zotero.Promise.delay(100);
+      const leftToggle = doc.querySelector<HTMLElement>(
+        `#${config.addonRef}-view-toggle`,
+      );
+      assert.exists(leftToggle);
+      assert.strictEqual(toolbar!.firstElementChild, leftToggle);
+      const leftRect = leftToggle!.getBoundingClientRect();
+      assert.isAbove(leftRect.width, 0, "left toggle width");
+      assert.isAbove(leftRect.height, 0, "left toggle height");
+
+      setPref("viewTogglePosition", "right");
+      await Zotero.Promise.delay(100);
+      const rightToggle = doc.querySelector<HTMLElement>(
+        `#${config.addonRef}-view-toggle`,
+      );
+      assert.exists(rightToggle);
+      const rightAnchor = toolbar!.querySelector(
+        "#zotero-tb-toggle-item-pane-stacked",
+      );
+      if (rightAnchor)
+        assert.strictEqual(rightAnchor.previousElementSibling, rightToggle);
+      else assert.strictEqual(toolbar!.lastElementChild, rightToggle);
+      const rightRect = rightToggle!.getBoundingClientRect();
+      assert.isAbove(rightRect.width, 0, "right toggle width");
+      assert.isAbove(rightRect.height, 0, "right toggle height");
+    } finally {
+      setPref(
+        "viewTogglePosition",
+        originalPosition === "left" ? "left" : "right",
+      );
+      await Zotero.Promise.delay(100);
+    }
   });
 
   it("should refresh database rows when the active Zotero collection changes", async function () {
@@ -1456,7 +1609,8 @@ describe("startup", function () {
     let currentItems = [first];
     zoteroPane.getSortedItems = () => currentItems;
     try {
-      if (toggleButton!.dataset.mode !== "table") toggleButton!.click();
+      if (toggleButton!.getAttribute("data-mode") !== "table")
+        clickControl(win, toggleButton!);
       const waitForRows = async (title: string, absentTitle: string) => {
         for (let attempt = 0; attempt < 60; attempt++) {
           const text = customPane!.textContent || "";
@@ -1493,7 +1647,8 @@ describe("startup", function () {
     } finally {
       zoteroPane.getSortedItems = originalGetSortedItems;
       controller.libraryTabActive = originalLibraryTabActive;
-      if (toggleButton!.dataset.mode === "table") toggleButton!.click();
+      if (toggleButton!.getAttribute("data-mode") === "table")
+        clickControl(win, toggleButton!);
       await first.eraseTx();
       await second.eraseTx();
     }
@@ -1532,7 +1687,8 @@ describe("startup", function () {
         openedIDs.push(item.id);
       };
       await win.ZoteroPane.selectItem(parent.id, true);
-      if (toggleButton?.dataset.mode !== "table") toggleButton?.click();
+      if (toggleButton?.getAttribute("data-mode") !== "table")
+        clickControl(win, toggleButton!);
       let row: HTMLElement | undefined;
       for (let attempt = 0; attempt < 60; attempt++) {
         row = [
@@ -1599,7 +1755,8 @@ describe("startup", function () {
       figureButton.remove();
     } finally {
       (Zotero.FileHandlers as any).open = originalFileOpen;
-      if (toggleButton?.dataset.mode === "table") toggleButton.click();
+      if (toggleButton?.getAttribute("data-mode") === "table")
+        clickControl(win, toggleButton);
       await Zotero.Promise.delay(80);
       await parent.eraseTx();
       await IOUtils.remove(path, { ignoreAbsent: true });
@@ -1679,7 +1836,9 @@ describe("startup", function () {
       assert.equal(figures[0].attachmentKey.length, 8);
       assert.equal(figures[0].sha256, revisedHash);
       const artifacts = await repository.loadArtifacts(refreshed);
+      const allArtifacts = await repository.loadAllArtifacts(refreshed);
       assert.lengthOf(artifacts, 1);
+      assert.lengthOf(allArtifacts, 2);
       assert.equal(artifacts[0].role, "figure");
       assert.equal(artifacts[0].figureID, "fig-1");
       assert.equal(artifacts[0].sha256, revisedHash);
@@ -1707,7 +1866,7 @@ describe("startup", function () {
       // repository so this exercises the production notification path.
       await visibilityController.repository.saveManifests(
         refreshed,
-        artifacts,
+        allArtifacts,
         figures,
       );
       await win.ZoteroPane.selectItem(refreshed.id, true);
@@ -1903,6 +2062,9 @@ describe("startup", function () {
     const originalRender = controller.render;
     const originalMode = controller.mode;
     const originalLibraryTabActive = controller.libraryTabActive;
+    const tabs = win.Zotero_Tabs as any;
+    const originalGetTab = tabs._getTab;
+    const originalSelectedID = tabs._selectedID;
     let renderCount = 0;
     controller.render = async () => {
       renderCount++;
@@ -1911,6 +2073,10 @@ describe("startup", function () {
     controller.libraryTabActive = true;
 
     try {
+      // Zotero_Tabs.selectedType is a non-configurable getter backed by
+      // _getTab(). Replace that backing lookup so this test exercises the
+      // same authoritative reader/library state used in production.
+      tabs._getTab = () => ({ tab: { type: "reader" }, tabIndex: 0 });
       controller.handleNotification("select", "tab", ["reader-test"], {
         "reader-test": { type: "reader" },
       });
@@ -1919,6 +2085,7 @@ describe("startup", function () {
       await Zotero.Promise.delay(120);
       assert.equal(renderCount, 0);
 
+      tabs._getTab = () => ({ tab: { type: "library" }, tabIndex: 0 });
       controller.handleNotification("select", "tab", ["library-test"], {
         "library-test": { type: "library" },
       });
@@ -1931,6 +2098,8 @@ describe("startup", function () {
       controller.render = originalRender;
       controller.mode = originalMode;
       controller.libraryTabActive = originalLibraryTabActive;
+      tabs._getTab = originalGetTab;
+      tabs._selectedID = originalSelectedID;
     }
   });
 });

@@ -1,11 +1,15 @@
 import type { FigureArtifact, ManagedArtifact } from "../domain/types";
 import { getPref, setPref } from "../utils/prefs";
-import { ResearchRepository } from "../storage/repository";
+import type { ResearchRepository } from "../storage/repository";
+import { getResearchRepository } from "../storage/repositoryScope";
 
 export const INTERNAL_TAG_PREFIX = "#ZRDB/";
 const MIGRATION_PREF = "artifactMetadataMigrationVersion";
 const MIGRATION_VERSION = 1;
-const repository = new ResearchRepository();
+export type ArtifactMetadataRepository = Pick<
+  ResearchRepository,
+  "loadFigures" | "loadArtifacts" | "saveArtifacts"
+>;
 
 /** Mark the previous artifact in the same logical slot as history. */
 export function setCurrentArtifact(
@@ -33,7 +37,9 @@ export interface ArtifactTagMigrationResult {
  * Move legacy #ZRDB/* attachment metadata into each parent item's structured
  * manifest, then remove only those internal tags through Zotero's public API.
  */
-export async function migrateLegacyInternalTags(): Promise<ArtifactTagMigrationResult> {
+export async function migrateLegacyInternalTags(
+  repository: ArtifactMetadataRepository = getResearchRepository(),
+): Promise<ArtifactTagMigrationResult> {
   if (Number(getPref(MIGRATION_PREF) || 0) >= MIGRATION_VERSION) {
     return { migrated: 0, removedTags: 0, skipped: true };
   }

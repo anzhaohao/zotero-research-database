@@ -265,13 +265,29 @@ export class MinerUConversionService {
   private cancelled = false;
   private running?: ProcessHandle;
   private controller?: AbortController;
+  private importing = false;
 
   constructor(private profile: MinerUProfile) {}
 
-  cancel(): void {
+  async cancel(): Promise<void> {
     this.cancelled = true;
     this.controller?.abort();
-    if (this.running) void this.running.kill(800);
+    const running = this.running;
+    if (running) {
+      try {
+        await running.kill(800);
+      } catch {
+        // The process may already have exited; runProcess will observe that.
+      }
+    }
+  }
+
+  isImporting(): boolean {
+    return this.importing;
+  }
+
+  private throwIfCancelled(): void {
+    if (this.cancelled) throw new Error("已取消 MinerU 任务");
   }
 
   async run(
@@ -298,6 +314,7 @@ export class MinerUConversionService {
         const pdf = resolution.attachment;
         const pdfPath = await pdf.getFilePathAsync();
         if (!pdfPath) throw new Error("主 PDF 文件不在本机，无法转换");
+        this.throwIfCancelled();
         onProgress({
           itemKey: item.key,
           state: "running",
@@ -315,14 +332,17 @@ export class MinerUConversionService {
           (message) =>
             onProgress({ itemKey: item.key, state: "running", message }),
         );
+        this.throwIfCancelled();
         if (!result.markdown.trim())
           throw new Error("MinerU 没有生成 Markdown");
         const baseName = safeBaseName(pdfPath);
         const title = `【MinerU原文】${baseName}.md`;
         const markdownPath = PathUtils.join(directory, title);
         await IOUtils.writeUTF8(markdownPath, result.markdown);
+        this.throwIfCancelled();
         const figureArtifacts = [];
         for (const figure of result.figures) {
+          this.throwIfCancelled();
           const extension = safeImageExtension(figure.imageName);
           const imageHash = await sha256Bytes(figure.bytes);
           const imagePath = PathUtils.join(
@@ -330,6 +350,7 @@ export class MinerUConversionService {
             `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
           );
           await (IOUtils as any).write(imagePath, figure.bytes);
+          this.throwIfCancelled();
           figureArtifacts.push({
             role: figure.kind,
             path: imagePath,
@@ -351,6 +372,9 @@ export class MinerUConversionService {
           state: "running",
           message: "正在导入 Zotero 条目",
         });
+        // Zotero attachment creation is not safely cancellable. Once this
+        // point is reached, finish the import and report its real outcome.
+        this.importing = true;
         await importArtifacts({
           libraryID: item.libraryID,
           parentItemKey: item.key,
@@ -365,22 +389,26 @@ export class MinerUConversionService {
             ...figureArtifacts,
           ],
         });
+        this.importing = false;
         onProgress({
           itemKey: item.key,
           state: "success",
           message: `${title} 与 ${result.figures.length} 个图表已导入条目`,
         });
       } catch (error) {
+        const cancelledBeforeImport = this.cancelled && !this.importing;
+        this.importing = false;
         onProgress({
           itemKey: item.key,
-          state: this.cancelled ? "cancelled" : "failed",
-          message: this.cancelled
+          state: cancelledBeforeImport ? "cancelled" : "failed",
+          message: cancelledBeforeImport
             ? "已取消，未导入"
             : error instanceof Error
               ? error.message
               : String(error),
         });
       } finally {
+        this.importing = false;
         await IOUtils.remove(directory, {
           recursive: true,
           ignoreAbsent: true,
@@ -414,7 +442,11 @@ export class MinerUConversionService {
         : `${endpoint}/health`;
     const headers =
       this.profile.mode === "official-api" ? this.officialHeaders() : {};
-    const response = await fetch(url, { headers });
+    const response = await fetchWithTimeout(
+      url,
+      { headers },
+      this.profile.timeoutMs,
+    );
     if (this.profile.mode === "official-api") {
       if ([401, 403].includes(response.status))
         throw new Error("MinerU Token 无效");
@@ -669,7 +701,7 @@ export class MinerUConversionService {
     const deadline = Date.now() + this.profile.timeoutMs;
     try {
       const fileName = PathUtils.filename(pdfPath);
-      const create = await fetch(
+      const create = await fetchWithTimeout(
         `${this.profile.officialEndpoint}/file-urls/batch`,
         {
           method: "POST",
@@ -690,8 +722,9 @@ export class MinerUConversionService {
             enable_table: this.profile.enableTable,
             language: this.profile.language,
           }),
-          signal: this.controller?.signal,
         },
+        remainingTimeout(deadline),
+        this.controller?.signal,
       );
       const created = await jsonResponse(create, "申请 MinerU 上传地址");
       const data = created.data as Record<string, unknown> | undefined;
@@ -706,18 +739,24 @@ export class MinerUConversionService {
             );
       if (!batchID || !uploadUrl)
         throw new Error("MinerU 没有返回上传地址或批次 ID");
-      const upload = await fetch(uploadUrl, {
-        method: "PUT",
-        body: await IOUtils.read(pdfPath),
-        signal: this.controller?.signal,
-      });
+      const upload = await fetchWithTimeout(
+        uploadUrl,
+        {
+          method: "PUT",
+          body: await IOUtils.read(pdfPath),
+        },
+        remainingTimeout(deadline),
+        this.controller?.signal,
+      );
       if (!upload.ok) throw new Error(`上传主 PDF 失败：HTTP ${upload.status}`);
 
       while (Date.now() < deadline) {
         await delay(2000);
-        const response = await fetch(
+        const response = await fetchWithTimeout(
           `${this.profile.officialEndpoint}/extract-results/batch/${encodeURIComponent(batchID)}`,
-          { headers: this.officialHeaders(), signal: this.controller?.signal },
+          { headers: this.officialHeaders() },
+          remainingTimeout(deadline),
+          this.controller?.signal,
         );
         const payload = await jsonResponse(response, "查询 MinerU 任务");
         const resultValue = (
@@ -738,7 +777,11 @@ export class MinerUConversionService {
           const zipUrl = String(result.full_zip_url || "");
           if (!zipUrl) throw new Error("MinerU 任务完成但没有结果下载地址");
           return mineruResultFromZip(
-            await downloadBytes(zipUrl, this.controller?.signal),
+            await downloadBytes(
+              zipUrl,
+              this.controller?.signal,
+              remainingTimeout(deadline),
+            ),
             safeBaseName(pdfPath),
           );
         }
@@ -758,14 +801,15 @@ export class MinerUConversionService {
       const bytes = await IOUtils.read(pdfPath);
       const fileName = PathUtils.filename(pdfPath);
       const directMultipart = this.selfHostedMultipart(bytes, fileName);
-      const direct = await fetch(
+      const direct = await fetchWithTimeout(
         `${this.profile.selfHostedEndpoint}/file_parse`,
         {
           method: "POST",
           headers: { "content-type": directMultipart.contentType },
           body: directMultipart.body,
-          signal: this.controller?.signal,
         },
+        remainingTimeout(deadline),
+        this.controller?.signal,
       );
       if (![404, 405].includes(direct.status)) {
         if (!direct.ok)
@@ -776,14 +820,15 @@ export class MinerUConversionService {
       }
 
       const taskMultipart = this.selfHostedMultipart(bytes, fileName);
-      const submitted = await fetch(
+      const submitted = await fetchWithTimeout(
         `${this.profile.selfHostedEndpoint}/tasks`,
         {
           method: "POST",
           headers: { "content-type": taskMultipart.contentType },
           body: taskMultipart.body,
-          signal: this.controller?.signal,
         },
+        remainingTimeout(deadline),
+        this.controller?.signal,
       );
       if (!submitted.ok)
         throw new Error(`MinerU 本地服务提交失败：HTTP ${submitted.status}`);
@@ -796,9 +841,11 @@ export class MinerUConversionService {
 
       while (Date.now() < deadline) {
         await delay(1500);
-        const response = await fetch(
+        const response = await fetchWithTimeout(
           `${this.profile.selfHostedEndpoint}/tasks/${encodeURIComponent(taskID)}`,
-          { signal: this.controller?.signal },
+          {},
+          remainingTimeout(deadline),
+          this.controller?.signal,
         );
         if (!response.ok)
           throw new Error(`MinerU 本地任务查询失败：HTTP ${response.status}`);
@@ -811,9 +858,11 @@ export class MinerUConversionService {
           throw new Error(`MinerU 本地解析失败：${status.error || "未知错误"}`);
         }
         if (["completed", "done", "success"].includes(state)) {
-          const result = await fetch(
+          const result = await fetchWithTimeout(
             `${this.profile.selfHostedEndpoint}/tasks/${encodeURIComponent(taskID)}/result`,
-            { signal: this.controller?.signal },
+            {},
+            remainingTimeout(deadline),
+            this.controller?.signal,
           );
           if (!result.ok)
             throw new Error(`MinerU 本地结果下载失败：HTTP ${result.status}`);
@@ -926,11 +975,16 @@ export class MinerUConversionService {
       const result = await Promise.race([
         process.wait(),
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            void process.kill(800);
-            reject(
-              new Error(`外部进程运行超时：${PathUtils.filename(executable)}`),
-            );
+          timer = setTimeout(async () => {
+            try {
+              await process.kill(800);
+            } finally {
+              reject(
+                new Error(
+                  `外部进程运行超时：${PathUtils.filename(executable)}`,
+                ),
+              );
+            }
           }, timeoutMs);
         }),
       ]);
@@ -944,6 +998,13 @@ export class MinerUConversionService {
       return output;
     } finally {
       if (timer) clearTimeout(timer);
+      if (this.running === process && this.cancelled) {
+        try {
+          await process.kill(800);
+        } catch {
+          // Already exited.
+        }
+      }
       this.running = undefined;
     }
   }
@@ -1165,7 +1226,7 @@ function isContentListName(path: string): boolean {
 
 async function endpointHealthy(endpoint: string): Promise<boolean> {
   try {
-    const response = await fetch(`${endpoint}/health`);
+    const response = await fetchWithTimeout(`${endpoint}/health`, {}, 5_000);
     return response.ok;
   } catch {
     return false;
@@ -1657,11 +1718,57 @@ async function jsonResponse(
 async function downloadBytes(
   url: string,
   signal?: AbortSignal,
+  timeoutMs = 120_000,
 ): Promise<Uint8Array> {
-  const response = await fetch(url, { signal });
+  const response = await fetchWithTimeout(url, {}, timeoutMs, signal);
   if (!response.ok)
     throw new Error(`下载 MinerU 结果失败：HTTP ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
+}
+
+function remainingTimeout(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+): Promise<Response> {
+  if (parentSignal?.aborted) throw new Error("MinerU 请求已取消");
+  const controller = createCompatibleAbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let parentListener: (() => void) | undefined;
+  const signal = controller?.signal || parentSignal;
+  if (controller && parentSignal) {
+    parentListener = () => controller.abort();
+    parentSignal.addEventListener("abort", parentListener, { once: true });
+  }
+  const request = fetch(input, signal ? { ...init, signal } : init);
+  let timedOut = false;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => {
+        timedOut = true;
+        controller?.abort();
+        reject(new Error("MinerU 网络请求超时"));
+      },
+      Math.max(1, timeoutMs),
+    );
+  });
+  try {
+    return await Promise.race([request, timeout]);
+  } catch (error) {
+    if (timedOut) throw new Error("MinerU 网络请求超时", { cause: error });
+    if (parentSignal?.aborted)
+      throw new Error("MinerU 请求已取消", { cause: error });
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (parentSignal && parentListener)
+      parentSignal.removeEventListener("abort", parentListener);
+  }
 }
 
 function normalizeEndpoint(value: string): string {

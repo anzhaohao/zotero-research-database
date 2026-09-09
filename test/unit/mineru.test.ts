@@ -538,4 +538,43 @@ describe("MinerU integration", function () {
       "mineru-api",
     ]);
   });
+
+  it("aborts a hanging self-hosted request when the conversion is cancelled", async function () {
+    const restoreIO = replaceGlobal("IOUtils", {
+      read: async () => Uint8Array.from([37, 80, 68, 70]),
+    });
+    const restorePath = replaceGlobal("PathUtils", {
+      filename: (path: string) => path.split(/[\\/]/).at(-1) || path,
+    });
+    let aborted = false;
+    const restoreFetch = replaceGlobal(
+      "fetch",
+      async (_url: unknown, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+    try {
+      const service = new MinerUConversionService(selfHostedProfile());
+      const pending = convertWithSelfHosted(service, "C:\\papers\\hang.pdf");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await service.cancel();
+      let failure: unknown;
+      try {
+        await pending;
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).to.be.instanceOf(Error);
+      expect((failure as Error).message).to.equal("MinerU 请求已取消");
+      expect(aborted).to.equal(true);
+    } finally {
+      restoreFetch();
+      restorePath();
+      restoreIO();
+    }
+  });
 });

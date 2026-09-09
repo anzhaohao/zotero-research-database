@@ -607,11 +607,11 @@ export async function parseBackupArchive(
 
 /** Enumerate regular items of the current personal library for matching. */
 export async function enumerateCurrentItems(): Promise<ImportCandidate[]> {
-  const all = (await (Zotero.Items as any).getAll(
+  const all = await Zotero.Items.getAll(
     Zotero.Libraries.userLibraryID,
     true,
     false,
-  )) as ZoteroItemLike[];
+  );
   return all
     .filter((item) => item.isRegularItem())
     .map((item) => {

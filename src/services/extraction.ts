@@ -75,6 +75,7 @@ export class ExternalAgentExtractionService {
       }
       let stage = "读取研究属性";
       try {
+        this.throwIfCancelled();
         const record = (await this.repository.loadRecord(
           item,
           true,
@@ -96,6 +97,7 @@ export class ExternalAgentExtractionService {
           continue;
         }
         stage = "读取论文全文";
+        this.throwIfCancelled();
         onProgress({
           itemKey: item.key,
           fieldIDs,
@@ -103,6 +105,7 @@ export class ExternalAgentExtractionService {
           message: "正在读取论文全文",
         });
         const source = await this.sourceResolver(item);
+        this.throwIfCancelled();
         const prepared = prepareExtractionText(source.text);
         stage = "外部 Agent 处理";
         onProgress({
@@ -120,8 +123,10 @@ export class ExternalAgentExtractionService {
         );
         let result;
         try {
+          this.throwIfCancelled();
           result = await this.agent.extractFields(fields, staged.input);
         } catch (directError) {
+          this.throwIfCancelled();
           if (!source.text.trim() || !staged.input.pdfPath) throw directError;
           onProgress({
             itemKey: item.key,
@@ -129,6 +134,7 @@ export class ExternalAgentExtractionService {
             state: "running",
             message: "Agent 直读主 PDF 失败，正在回退到 Zotero 文本",
           });
+          this.throwIfCancelled();
           result = await this.agent.extractFields(fields, {
             text: prepared.text,
             images: staged.input.images,
@@ -137,6 +143,7 @@ export class ExternalAgentExtractionService {
         } finally {
           await staged.cleanup();
         }
+        this.throwIfCancelled();
         if (this.cancelled) {
           onProgress({
             itemKey: item.key,
@@ -153,7 +160,7 @@ export class ExternalAgentExtractionService {
           state: "running",
           message: "正在保存研究属性",
         });
-        const next = applyAgentValues(record, result.value, {
+        const audit = {
           executor:
             this.agent.kind === "codex-cli" ? "codex" : "external-agent",
           executorVersion: result.executorVersion,
@@ -163,8 +170,25 @@ export class ExternalAgentExtractionService {
           templateVersion: Math.max(
             ...fields.map((field) => field.extraction.templateVersion),
           ),
-        });
-        await this.repository.saveRecord(item, next, workspace.fields);
+        } as const;
+        this.throwIfCancelled();
+        const repositoryWithUpdater = this.repository as ResearchRepository & {
+          updateRecord?: ResearchRepository["updateRecord"];
+        };
+        if (typeof repositoryWithUpdater.updateRecord === "function") {
+          await repositoryWithUpdater.updateRecord(
+            item,
+            (latest) => applyAgentValues(latest, result.value, audit),
+            workspace.fields,
+          );
+        } else {
+          // Compatibility for lightweight test doubles and older integrations.
+          await this.repository.saveRecord(
+            item,
+            applyAgentValues(record, result.value, audit),
+            workspace.fields,
+          );
+        }
         onProgress({
           itemKey: item.key,
           fieldIDs,
@@ -183,6 +207,10 @@ export class ExternalAgentExtractionService {
         });
       }
     }
+  }
+
+  private throwIfCancelled(): void {
+    if (this.cancelled) throw new Error("已取消，未写入研究属性");
   }
 }
 
@@ -206,11 +234,9 @@ async function stageAgentDocument(
   },
   text: string,
 ): Promise<StagedAgentDocument> {
-  const original: AgentDocumentInput = {
-    pdfPath: source.pdfPath,
+  const textOnly: AgentDocumentInput = {
     text,
-    images: source.images,
-    sourceType: source.pdfPath ? "pdf-direct" : source.type,
+    sourceType: source.type,
   };
   const pathUtils = (globalThis as any).PathUtils as
     | {
@@ -242,7 +268,9 @@ async function stageAgentDocument(
     typeof io.write !== "function" ||
     typeof io.remove !== "function"
   ) {
-    return { input: original, cleanup: async () => undefined };
+    if (!text.trim())
+      throw new Error("无法安全暂存 PDF，且没有可供 Agent 使用的全文文本");
+    return { input: textOnly, cleanup: async () => undefined };
   }
 
   const directory = pathUtils.join(
@@ -271,14 +299,18 @@ async function stageAgentDocument(
       }
     }
     return {
-      input: { ...original, pdfPath, images },
+      input: { text, pdfPath, images, sourceType: "pdf-direct" },
       cleanup: async () => {
         await io.remove!(directory, { recursive: true, ignoreAbsent: true });
       },
     };
-  } catch {
+  } catch (error) {
     await io.remove(directory, { recursive: true, ignoreAbsent: true });
-    return { input: original, cleanup: async () => undefined };
+    if (!text.trim())
+      throw new Error("PDF 暂存失败且没有可供 Agent 使用的全文文本", {
+        cause: error,
+      });
+    return { input: textOnly, cleanup: async () => undefined };
   }
 }
 

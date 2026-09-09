@@ -5,6 +5,7 @@
  * work while scrolling. Zotero's bundled PDF.js is loaded lazily at runtime.
  */
 import { resolvePrimaryPdf } from "./primaryPdf";
+import { readLru, writeLru } from "../core/lruCache";
 
 export interface PdfThumbnailResult {
   dataUrl?: string;
@@ -13,16 +14,21 @@ export interface PdfThumbnailResult {
   reason?: "no-pdf" | "unreadable" | "unsupported";
 }
 
+interface PdfDocument {
+  numPages: number;
+  getPage(index: number): Promise<{
+    getViewport(options: { scale: number }): { width: number; height: number };
+    render(options: Record<string, unknown>): { promise: Promise<void> };
+  }>;
+  destroy?: () => void | Promise<void>;
+}
+
 type PdfJs = {
   GlobalWorkerOptions?: {
     workerSrc?: string;
   };
   getDocument(options: Record<string, unknown>): {
-    promise: Promise<{
-      numPages: number;
-      getPage(index: number): Promise<any>;
-      destroy?: () => void;
-    }>;
+    promise: Promise<PdfDocument>;
   };
 };
 
@@ -30,6 +36,9 @@ const cache = new Map<string, PdfThumbnailResult>();
 const pending = new Map<string, Promise<PdfThumbnailResult>>();
 const pageCountCache = new Map<string, number>();
 const pageCountPending = new Map<string, Promise<number>>();
+const PDF_THUMBNAIL_CACHE_LIMIT = 50;
+const PDF_PAGE_COUNT_CACHE_LIMIT = 256;
+let cacheGeneration = 0;
 let active = 0;
 const waiting: Array<() => void> = [];
 let pdfJsPromise: Promise<PdfJs> | undefined;
@@ -44,6 +53,23 @@ function mainWindow(): Window | undefined {
 function logThumbnailError(stage: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   Zotero.logError(new Error(`[ZRDB PDF thumbnail] ${stage}: ${message}`));
+}
+
+async function disposePdf(document: PdfDocument | undefined): Promise<void> {
+  try {
+    await document?.destroy?.();
+  } catch (error) {
+    logThumbnailError("release document", error);
+  }
+}
+
+function rememberThumbnail(key: string, result: PdfThumbnailResult): void {
+  if (key.startsWith(`${cacheGeneration}:`))
+    writeLru(cache, key, result, PDF_THUMBNAIL_CACHE_LIMIT);
+}
+
+function pdfCacheKey(attachment: PdfAttachmentFile): string {
+  return `${cacheGeneration}:${attachment.item.libraryID}:${attachment.item.key}:${attachment.path}:${attachment.modified}:${attachment.size}`;
 }
 
 async function withLimit<T>(task: () => Promise<T>): Promise<T> {
@@ -104,6 +130,7 @@ interface PdfAttachmentFile {
   item: Zotero.Item;
   path: string;
   modified: number;
+  size: number;
 }
 
 async function resolvePdfAttachment(
@@ -118,11 +145,16 @@ async function resolvePdfAttachment(
   if (!attachment) return undefined;
   const path = await attachment.getFilePathAsync();
   if (!path) return undefined;
-  const contentType = String((attachment as any).attachmentContentType || "");
+  const contentType = String(attachment.attachmentContentType || "");
   if (contentType && contentType !== "application/pdf" && !/\.pdf$/i.test(path))
     return undefined;
   const stat = await (globalThis as any).IOUtils.stat(path);
-  return { item: attachment, path, modified: Number(stat.lastModified || 0) };
+  return {
+    item: attachment,
+    path,
+    modified: Number(stat.lastModified || 0),
+    size: Number(stat.size || 0),
+  };
 }
 
 async function bytesFor(path: string): Promise<Uint8Array | undefined> {
@@ -174,17 +206,18 @@ async function writeCanvas(
 export async function getPdfPageCount(item: Zotero.Item): Promise<number> {
   const attachment = await resolvePdfAttachment(item);
   if (!attachment) return 0;
-  const key = `${attachment.item.key}:${attachment.modified}`;
-  const cached = pageCountCache.get(key);
+  const key = pdfCacheKey(attachment);
+  const cached = readLru(pageCountCache, key);
   if (cached !== undefined) return cached;
   const running = pageCountPending.get(key);
   if (running) return running;
   const task = withLimit(async () => {
+    let documentProxy: PdfDocument | undefined;
     try {
       const bytes = await bytesFor(attachment.path);
       if (!bytes) return 0;
       const pdfjs = await loadPdfJs();
-      const documentProxy = await pdfjs.getDocument({
+      documentProxy = await pdfjs.getDocument({
         data: bytes,
         annotationMode: 0,
         disableAutoFetch: true,
@@ -192,12 +225,14 @@ export async function getPdfPageCount(item: Zotero.Item): Promise<number> {
         useWorkerFetch: false,
       }).promise;
       const count = Math.max(0, Number(documentProxy.numPages || 0));
-      documentProxy.destroy?.();
-      pageCountCache.set(key, count);
+      if (key.startsWith(`${cacheGeneration}:`))
+        writeLru(pageCountCache, key, count, PDF_PAGE_COUNT_CACHE_LIMIT);
       return count;
     } catch (error) {
       logThumbnailError("read page count", error);
       return 0;
+    } finally {
+      await disposePdf(documentProxy);
     }
   });
   pageCountPending.set(key, task);
@@ -217,12 +252,13 @@ export async function getPdfThumbnail(
   const attachment = await resolvePdfAttachment(item);
   if (!attachment) return { reason: "no-pdf" };
   const page = Math.max(1, Math.floor(pageNumber));
-  const key = `${attachment.item.key}:${attachment.modified}:${width}:${page}`;
-  const existing = cache.get(key);
+  const key = `${pdfCacheKey(attachment)}:${width}:${page}`;
+  const existing = readLru(cache, key);
   if (existing) return existing;
   const running = pending.get(key);
   if (running) return running;
   const task = withLimit(async () => {
+    let documentProxy: PdfDocument | undefined;
     try {
       const directory = PathUtils.join(
         (globalThis as any).PathUtils.profileDir,
@@ -231,7 +267,7 @@ export async function getPdfThumbnail(
       );
       const cachePath = PathUtils.join(
         directory,
-        `${attachment.item.key}-${attachment.modified}-${width}-p${page}.png`,
+        `${attachment.item.libraryID}-${attachment.item.key}-${attachment.modified}-${attachment.size}-${width}-p${page}.png`,
       );
       // Disk caching must never make a valid thumbnail fail to display. A
       // read-only profile or a transient disk error simply skips the cache.
@@ -240,7 +276,7 @@ export async function getPdfThumbnail(
         const disk = await readPdfRegionDiskCache(cachePath);
         if (disk) {
           const result = disk;
-          cache.set(key, result);
+          rememberThumbnail(key, result);
           return result;
         }
       } catch (error) {
@@ -249,7 +285,7 @@ export async function getPdfThumbnail(
       const bytes = await bytesFor(attachment.path);
       if (!bytes) return { reason: "no-pdf" as const };
       const pdfjs = await loadPdfJs();
-      const documentProxy = await pdfjs.getDocument({
+      documentProxy = await pdfjs.getDocument({
         data: bytes,
         annotationMode: 0,
         disableAutoFetch: true,
@@ -257,7 +293,6 @@ export async function getPdfThumbnail(
         useWorkerFetch: false,
       }).promise;
       if (page > Number(documentProxy.numPages || 0)) {
-        documentProxy.destroy?.();
         return { reason: "unreadable" as const };
       }
       const pdfPage = await documentProxy.getPage(page);
@@ -287,14 +322,15 @@ export async function getPdfThumbnail(
       } catch (error) {
         logThumbnailError("write cache", error);
       }
-      documentProxy.destroy?.();
-      cache.set(key, result);
+      rememberThumbnail(key, result);
       return result;
     } catch (error) {
       logThumbnailError("render page", error);
       // Do not poison the in-memory cache after a transient worker, canvas or
       // file-access failure. The next visible-row pass can retry the PDF.
       return { reason: "unreadable" as const };
+    } finally {
+      await disposePdf(documentProxy);
     }
   });
   pending.set(key, task);
@@ -349,8 +385,8 @@ export async function getPdfRegionThumbnail(
   if (!(w > 0 && h > 0)) return { reason: "unreadable" };
   const page = Math.max(1, Math.floor(pageIndex) + 1);
   const targetWidth = Math.max(160, Math.min(2400, Math.floor(width)));
-  const key = `${attachment.item.key}:${attachment.modified}:region:${page}:${x.toFixed(5)}:${y.toFixed(5)}:${w.toFixed(5)}:${h.toFixed(5)}:${targetWidth}`;
-  const existing = cache.get(key);
+  const key = `${pdfCacheKey(attachment)}:region:${page}:${x.toFixed(5)}:${y.toFixed(5)}:${w.toFixed(5)}:${h.toFixed(5)}:${targetWidth}`;
+  const existing = readLru(cache, key);
   if (existing) return existing;
   const running = pending.get(key);
   if (running) return running;
@@ -362,16 +398,17 @@ export async function getPdfRegionThumbnail(
   );
   const cachePath = PathUtils.join(
     directory,
-    `${attachment.item.key}-${attachment.modified}-${page}-${targetWidth}-${Math.round(x * 10000)}-${Math.round(y * 10000)}-${Math.round(w * 10000)}-${Math.round(h * 10000)}.png`,
+    `${attachment.item.libraryID}-${attachment.item.key}-${attachment.modified}-${attachment.size}-${page}-${targetWidth}-${Math.round(x * 10000)}-${Math.round(y * 10000)}-${Math.round(w * 10000)}-${Math.round(h * 10000)}.png`,
   );
   const task = withLimit(async () => {
+    let documentProxy: PdfDocument | undefined;
     try {
       try {
         await IOUtils.makeDirectory(directory, { ignoreExisting: true });
         const disk = await cachedDataUrl(cachePath);
         if (disk) {
           const result = { dataUrl: disk, path: cachePath };
-          cache.set(key, result);
+          rememberThumbnail(key, result);
           return result;
         }
       } catch (error) {
@@ -380,7 +417,7 @@ export async function getPdfRegionThumbnail(
       const bytes = await bytesFor(attachment.path);
       if (!bytes) return { reason: "no-pdf" as const };
       const pdfjs = await loadPdfJs();
-      const documentProxy = await pdfjs.getDocument({
+      documentProxy = await pdfjs.getDocument({
         data: bytes,
         annotationMode: 0,
         disableAutoFetch: true,
@@ -388,7 +425,6 @@ export async function getPdfRegionThumbnail(
         useWorkerFetch: false,
       }).promise;
       if (page > Number(documentProxy.numPages || 0)) {
-        documentProxy.destroy?.();
         return { reason: "unreadable" as const };
       }
       const pdfPage = await documentProxy.getPage(page);
@@ -426,12 +462,13 @@ export async function getPdfRegionThumbnail(
         dataUrl: canvas.toDataURL("image/png"),
         path: cachePath,
       };
-      documentProxy.destroy?.();
-      cache.set(key, result);
+      rememberThumbnail(key, result);
       return result;
     } catch (error) {
       logThumbnailError("render PDF region", error);
       return { reason: "unreadable" as const };
+    } finally {
+      await disposePdf(documentProxy);
     }
   });
   pending.set(key, task);
@@ -443,6 +480,21 @@ export async function getPdfRegionThumbnail(
 }
 
 export function clearPdfThumbnailCache(): void {
+  cacheGeneration += 1;
   cache.clear();
   pageCountCache.clear();
+}
+
+/** Bounded diagnostics for host performance checks; no document data is exposed. */
+export function getPdfThumbnailCacheStats() {
+  return {
+    thumbnails: cache.size,
+    pageCounts: pageCountCache.size,
+    pendingThumbnails: pending.size,
+    pendingPageCounts: pageCountPending.size,
+    active,
+    queued: waiting.length,
+    thumbnailLimit: PDF_THUMBNAIL_CACHE_LIMIT,
+    pageCountLimit: PDF_PAGE_COUNT_CACHE_LIMIT,
+  };
 }

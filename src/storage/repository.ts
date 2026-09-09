@@ -35,9 +35,11 @@ import {
 import {
   ResearchSyncedStore,
   createItemInternalState,
+  getMigrationSyncedSettings,
   type ResearchDataStore,
 } from "./syncedData";
 import { ResearchLocalStore } from "./localData";
+import { KeyedAsyncLock } from "../core/asyncLock";
 
 export const WORKSPACE_TITLE = "Zotero Research Database";
 
@@ -56,6 +58,8 @@ export interface LegacyStorageMigrationResult {
 export class ResearchRepository {
   private workspaceItemID?: number;
   private readonly legacySyncedStore = new ResearchSyncedStore();
+  private readonly itemWriteLock = new KeyedAsyncLock();
+  private readonly workspaceWriteLock = new KeyedAsyncLock();
 
   constructor(private store: ResearchDataStore = new ResearchLocalStore()) {}
 
@@ -103,11 +107,13 @@ export class ResearchRepository {
   }
 
   async saveWorkspace(state: WorkspaceState): Promise<void> {
-    await this.ready();
-    const item = await this.ensureWorkspaceItem();
-    const next = { ...state, updatedAt: new Date().toISOString() };
-    await this.store.setWorkspace(this.libraryID, next);
-    await this.cleanupWorkspaceExtra(item);
+    await this.workspaceWriteLock.run(String(this.libraryID), async () => {
+      await this.ready();
+      const item = await this.ensureWorkspaceItem();
+      const next = { ...state, updatedAt: new Date().toISOString() };
+      await this.store.setWorkspace(this.libraryID, next);
+      await this.cleanupWorkspaceExtra(item);
+    });
   }
 
   async getWorkspaceItem(): Promise<Zotero.Item> {
@@ -161,13 +167,38 @@ export class ResearchRepository {
     record: ItemResearchRecord,
     _definitions: FieldDefinition[],
   ): Promise<void> {
-    await this.ready();
-    this.assertPaper(item);
-    this.assertRecordIdentity(item, record);
-    const state =
-      (await this.loadItemState(item)) ||
-      createItemInternalState(item.libraryID, item.key);
-    await this.saveItemState(item, { ...state, record });
+    await this.withItemWriteLock(item, async () => {
+      await this.ready();
+      this.assertPaper(item);
+      this.assertRecordIdentity(item, record);
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      await this.saveItemState(item, { ...state, record });
+    });
+  }
+
+  /** Read the latest record under the same lock used by all item mutations. */
+  async updateRecord(
+    item: Zotero.Item,
+    updater: (
+      current: ItemResearchRecord,
+    ) => ItemResearchRecord | Promise<ItemResearchRecord>,
+    definitions: FieldDefinition[] = [],
+  ): Promise<ItemResearchRecord> {
+    return this.withItemWriteLock(item, async () => {
+      await this.ready();
+      this.assertPaper(item);
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      const current =
+        state.record || createEmptyRecord(item.libraryID, item.key);
+      const next = await updater(current);
+      this.assertRecordIdentity(item, next);
+      await this.saveItemState(item, { ...state, record: next });
+      return this.store.getItem(item.libraryID, item.key)?.record || next;
+    });
   }
 
   /**
@@ -181,39 +212,42 @@ export class ResearchRepository {
     audit: FieldAudit,
     currentRecord?: ItemResearchRecord,
   ): Promise<ItemResearchRecord> {
-    await this.ready();
-    this.assertPaper(item);
-    if (currentRecord) {
-      this.assertRecordIdentity(item, currentRecord);
-      const current = currentRecord.fields[TRANSLATED_TITLE_FIELD_ID];
-      if (current?.locked || String(current?.value ?? "").trim()) {
-        return currentRecord;
+    return this.withItemWriteLock(item, async () => {
+      await this.ready();
+      this.assertPaper(item);
+      if (currentRecord) {
+        this.assertRecordIdentity(item, currentRecord);
+        const current = currentRecord.fields[TRANSLATED_TITLE_FIELD_ID];
+        if (current?.locked || String(current?.value ?? "").trim()) {
+          return currentRecord;
+        }
       }
-    }
-    const translated = value.trim();
-    if (!translated) throw new Error("中文标题不能为空");
-    const state =
-      this.store.getItem(item.libraryID, item.key) ||
-      createItemInternalState(item.libraryID, item.key);
-    this.assertStateIdentity(item, state);
-    const record = state.record || createEmptyRecord(item.libraryID, item.key);
-    const existing = record.fields[TRANSLATED_TITLE_FIELD_ID];
-    if (existing?.locked || String(existing?.value ?? "").trim()) {
-      return record;
-    }
-    const next = applyAgentValues(
-      record,
-      { [TRANSLATED_TITLE_FIELD_ID]: translated },
-      audit,
-    );
-    const nextState = { ...state, record: next };
-    await this.store.setItem(nextState, {
-      changeScope: "translated-title",
+      const translated = value.trim();
+      if (!translated) throw new Error("中文标题不能为空");
+      const state =
+        this.store.getItem(item.libraryID, item.key) ||
+        createItemInternalState(item.libraryID, item.key);
+      this.assertStateIdentity(item, state);
+      const record =
+        state.record || createEmptyRecord(item.libraryID, item.key);
+      const existing = record.fields[TRANSLATED_TITLE_FIELD_ID];
+      if (existing?.locked || String(existing?.value ?? "").trim()) {
+        return record;
+      }
+      const next = applyAgentValues(
+        record,
+        { [TRANSLATED_TITLE_FIELD_ID]: translated },
+        audit,
+      );
+      const nextState = { ...state, record: next };
+      await this.store.setItem(nextState, {
+        changeScope: "translated-title",
+      });
+      const stored = this.store.getItem(item.libraryID, item.key);
+      if (!stored) throw new Error(`条目 ${item.key} 的标题翻译保存后无法回读`);
+      this.assertStateIdentity(item, stored);
+      return stored.record || next;
     });
-    const stored = this.store.getItem(item.libraryID, item.key);
-    if (!stored) throw new Error(`条目 ${item.key} 的标题翻译保存后无法回读`);
-    this.assertStateIdentity(item, stored);
-    return stored.record || next;
   }
 
   async saveNativeField(
@@ -252,16 +286,26 @@ export class ResearchRepository {
     item: Zotero.Item,
     figures: FigureArtifact[],
   ): Promise<void> {
-    this.assertPaper(item);
-    if (figures.some((figure) => figure.parentItemKey !== item.key))
-      throw new Error(`拒绝把其它条目的图表清单用于条目 ${item.key}`);
-    const state =
-      (await this.loadItemState(item)) ||
-      createItemInternalState(item.libraryID, item.key);
-    await this.saveItemState(item, { ...state, figures });
+    await this.withItemWriteLock(item, async () => {
+      this.assertPaper(item);
+      if (figures.some((figure) => figure.parentItemKey !== item.key))
+        throw new Error(`拒绝把其它条目的图表清单用于条目 ${item.key}`);
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      await this.saveItemState(item, { ...state, figures });
+    });
   }
 
   async loadArtifacts(item: Zotero.Item): Promise<ManagedArtifact[]> {
+    return (
+      (await this.loadItemState(item))?.artifacts.filter(
+        (artifact) => !artifact.history,
+      ) || []
+    );
+  }
+
+  async loadAllArtifacts(item: Zotero.Item): Promise<ManagedArtifact[]> {
     return (await this.loadItemState(item))?.artifacts || [];
   }
 
@@ -269,10 +313,12 @@ export class ResearchRepository {
     item: Zotero.Item,
     artifacts: ManagedArtifact[],
   ): Promise<void> {
-    const state =
-      (await this.loadItemState(item)) ||
-      createItemInternalState(item.libraryID, item.key);
-    await this.saveItemState(item, { ...state, artifacts });
+    await this.withItemWriteLock(item, async () => {
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      await this.saveItemState(item, { ...state, artifacts });
+    });
   }
 
   async saveManifests(
@@ -280,15 +326,51 @@ export class ResearchRepository {
     artifacts: ManagedArtifact[],
     figures?: FigureArtifact[],
   ): Promise<void> {
-    const state =
-      (await this.loadItemState(item)) ||
-      createItemInternalState(item.libraryID, item.key);
-    if (figures?.some((figure) => figure.parentItemKey !== item.key))
-      throw new Error(`拒绝把其它条目的图表清单用于条目 ${item.key}`);
-    await this.saveItemState(item, {
-      ...state,
-      artifacts,
-      figures: figures || state.figures,
+    await this.withItemWriteLock(item, async () => {
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      if (figures?.some((figure) => figure.parentItemKey !== item.key))
+        throw new Error(`拒绝把其它条目的图表清单用于条目 ${item.key}`);
+      await this.saveItemState(item, {
+        ...state,
+        artifacts,
+        figures: figures || state.figures,
+      });
+    });
+  }
+
+  /** Atomically read, modify, and persist one item's artifact manifests. */
+  async updateManifests(
+    item: Zotero.Item,
+    updater: (current: {
+      artifacts: ManagedArtifact[];
+      figures: FigureArtifact[];
+    }) =>
+      | {
+          artifacts: ManagedArtifact[];
+          figures?: FigureArtifact[];
+        }
+      | Promise<{
+          artifacts: ManagedArtifact[];
+          figures?: FigureArtifact[];
+        }>,
+  ): Promise<void> {
+    await this.withItemWriteLock(item, async () => {
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      const next = await updater({
+        artifacts: state.artifacts,
+        figures: state.figures,
+      });
+      if (next.figures?.some((figure) => figure.parentItemKey !== item.key))
+        throw new Error(`拒绝把其它条目的图表清单用于条目 ${item.key}`);
+      await this.saveItemState(item, {
+        ...state,
+        artifacts: next.artifacts,
+        figures: next.figures || state.figures,
+      });
     });
   }
 
@@ -300,13 +382,15 @@ export class ResearchRepository {
     item: Zotero.Item,
     attachmentKey?: string,
   ): Promise<void> {
-    const state =
-      (await this.loadItemState(item)) ||
-      createItemInternalState(item.libraryID, item.key);
-    const next = { ...state };
-    if (attachmentKey) next.primaryPdfAttachmentKey = attachmentKey;
-    else delete next.primaryPdfAttachmentKey;
-    await this.saveItemState(item, next);
+    await this.withItemWriteLock(item, async () => {
+      const state =
+        (await this.loadItemState(item)) ||
+        createItemInternalState(item.libraryID, item.key);
+      const next = { ...state };
+      if (attachmentKey) next.primaryPdfAttachmentKey = attachmentKey;
+      else delete next.primaryPdfAttachmentKey;
+      await this.saveItemState(item, next);
+    });
   }
 
   /** Migrate every visible legacy Extra payload without touching user Extra. */
@@ -317,10 +401,7 @@ export class ResearchRepository {
     );
     const workspaceHadSynced = Boolean(this.readLegacyWorkspace());
     await this.loadWorkspace();
-    const all = (await (Zotero.Items as any).getAll(
-      this.libraryID,
-      true,
-    )) as Zotero.Item[];
+    const all = await Zotero.Items.getAll(this.libraryID, true);
     let migratedItems = 0;
     const failures: Error[] = [];
     for (const item of all) {
@@ -442,6 +523,13 @@ export class ResearchRepository {
     await this.store.ready?.();
   }
 
+  private async withItemWriteLock<T>(
+    item: Zotero.Item,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.itemWriteLock.run(`${item.libraryID}:${item.key}`, operation);
+  }
+
   private readLegacyWorkspace(): WorkspaceState | undefined {
     if (!this.syncedSettingsAvailable()) return undefined;
     return this.legacySyncedStore.getWorkspace(this.libraryID);
@@ -461,7 +549,7 @@ export class ResearchRepository {
 
   private async clearLegacyWorkspace(): Promise<void> {
     if (!this.syncedSettingsAvailable()) return;
-    await ((Zotero as any).SyncedSettings as any).clear(
+    await getMigrationSyncedSettings()?.clear(
       this.libraryID,
       WORKSPACE_SYNCED_SETTING,
       { skipDeleteLog: true },
@@ -470,7 +558,7 @@ export class ResearchRepository {
 
   private async clearLegacyItem(item: Zotero.Item): Promise<void> {
     if (!this.syncedSettingsAvailable()) return;
-    await ((Zotero as any).SyncedSettings as any).clear(
+    await getMigrationSyncedSettings()?.clear(
       item.libraryID,
       itemSyncedSetting(item.key),
       { skipDeleteLog: true },
@@ -478,12 +566,7 @@ export class ResearchRepository {
   }
 
   private syncedSettingsAvailable(): boolean {
-    const settings = (Zotero as any).SyncedSettings;
-    return Boolean(
-      settings &&
-      typeof settings.get === "function" &&
-      typeof settings.clear === "function",
-    );
+    return Boolean(getMigrationSyncedSettings());
   }
 
   private assertPaper(item: Zotero.Item): void {
@@ -532,10 +615,7 @@ export class ResearchRepository {
       ? await Zotero.Items.getAsync(this.workspaceItemID)
       : undefined;
     if (!item || !item.isRegularItem()) {
-      const all = (await (Zotero.Items as any).getAll(
-        this.libraryID,
-        true,
-      )) as Zotero.Item[];
+      const all = await Zotero.Items.getAll(this.libraryID, true);
       const candidates = all.filter(
         (candidate) =>
           candidate.isRegularItem() &&

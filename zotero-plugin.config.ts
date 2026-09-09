@@ -1,5 +1,5 @@
 import { defineConfig } from "zotero-plugin-scaffold";
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import pkg from "./package.json";
 
@@ -50,14 +50,36 @@ export default defineConfig({
   },
 
   test: {
+    entries: ["test/integration"],
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
     startupDelay: 2_000,
     prefs: {
       "extensions.zotero-research-database.test.pdfTranslateXpiInstalled":
         Boolean(pdfTranslateTestXpi),
+      "extensions.zotero-research-database.test.externalAgentEnabled":
+        process.env.ZRDB_TEST_EXTERNAL_AGENT === "1",
     },
     hooks: {
-      "test:init": async () => {
+      "test:bundleTests": async () => {
+        const grep = process.env.ZRDB_TEST_GREP?.trim();
+        if (!grep) return;
+        const index = resolve(".scaffold/test/resource/content/index.xhtml");
+        const source = await readFile(index, "utf8");
+        const pattern = JSON.stringify(grep)
+          .replace(/</g, "\\u003c")
+          .replace(/&/g, "\\u0026");
+        await writeFile(
+          index,
+          source.replace(
+            "mocha.run();",
+            `mocha.grep(${pattern}); mocha.run();`,
+          ),
+          "utf8",
+        );
+      },
+      "test:init": async (ctx) => {
+        // Keep a running user instance separate from this disposable profile.
+        ctx.server.startArgs = [...(ctx.server.startArgs || []), "-no-remote"];
         if (!pdfTranslateTestXpi) return;
         await mkdir(dirname(pdfTranslateTestTarget), { recursive: true });
         await copyFile(pdfTranslateTestXpi, pdfTranslateTestTarget);
