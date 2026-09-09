@@ -9,6 +9,68 @@ import { TRANSLATED_TITLE_FIELD_ID } from "../domain/defaults";
 const CODEX_MODULE = "resource://gre/modules/Subprocess.sys.mjs";
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
+/**
+ * Codex is used here as a short-lived, non-interactive JSON worker.  Do not
+ * inherit optional skill/tool integrations: a malformed global SKILL.md must
+ * not become a task dependency. The user's Codex config is intentionally
+ * retained because it may contain the authenticated provider/model routing
+ * used by the installation.
+ */
+export const CODEX_WORKER_FLAGS = [
+  "--disable",
+  "plugins",
+  "--disable",
+  "apps",
+  "--disable",
+  "browser_use",
+  "--disable",
+  "computer_use",
+  "--disable",
+  "multi_agent",
+  "--disable",
+  "hooks",
+  "--disable",
+  "shell_tool",
+  "--disable",
+  "skill_search",
+  "--disable",
+  "skill_mcp_dependency_install",
+  "--ignore-rules",
+] as const;
+
+export function buildCodexWorkerArguments(
+  model: string | undefined,
+  schemaPath: string,
+  outputPath: string,
+  workdir: string,
+  documentDirectory?: string,
+): string[] {
+  const modelArguments = model ? ["--model", model] : [];
+  return [
+    "exec",
+    ...CODEX_WORKER_FLAGS,
+    ...modelArguments,
+    "--config",
+    'model_reasoning_effort="low"',
+    "--config",
+    "notify=[]",
+    "--sandbox",
+    "read-only",
+    ...(documentDirectory ? ["--add-dir", documentDirectory] : []),
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--color",
+    "never",
+    "--output-schema",
+    schemaPath,
+    "--output-last-message",
+    outputPath,
+    "-C",
+    workdir,
+    "-",
+  ];
+}
+
 interface ProcessHandle {
   stdin: { write(value: string): Promise<unknown>; close(): Promise<unknown> };
   stdout: { readString(): Promise<string> };
@@ -21,6 +83,7 @@ interface SubprocessAPI {
   call(options: {
     command: string;
     arguments?: string[];
+    environment?: Record<string, string>;
     environmentAppend?: boolean;
     stderr?: "ignore" | "stdout" | "pipe";
     workdir?: string;
@@ -248,52 +311,27 @@ export class CodexAgentBridge implements AgentBridge {
     );
     const schemaPath = PathUtils.join(directory, "output.schema.json");
     const outputPath = PathUtils.join(directory, "result.json");
+    const codexHome = PathUtils.join(directory, "codex-home");
     await IOUtils.makeDirectory(directory, { ignoreExisting: true });
     await IOUtils.writeUTF8(schemaPath, JSON.stringify(schema));
+    await prepareIsolatedCodexHome(codexHome);
 
     try {
-      const modelArguments = this.profile.model
-        ? ["--model", this.profile.model]
-        : [];
       const documentDirectory = document?.pdfPath
         ? parentPath(document.pdfPath)
         : undefined;
       const process = await subprocess.call({
         command: executable,
-        arguments: [
-          "exec",
-          "--disable",
-          "plugins",
-          "--disable",
-          "apps",
-          "--disable",
-          "browser_use",
-          "--disable",
-          "computer_use",
-          "--disable",
-          "multi_agent",
-          "--disable",
-          "hooks",
-          "--disable",
-          "shell_tool",
-          ...modelArguments,
-          "--config",
-          'model_reasoning_effort="low"',
-          "--sandbox",
-          "read-only",
-          ...(documentDirectory ? ["--add-dir", documentDirectory] : []),
-          "--skip-git-repo-check",
-          "--ephemeral",
-          "--color",
-          "never",
-          "--output-schema",
+        arguments: buildCodexWorkerArguments(
+          this.profile.model,
           schemaPath,
-          "--output-last-message",
           outputPath,
-          "-C",
           directory,
-          "-",
-        ],
+          documentDirectory,
+        ),
+        // Keep authentication/provider routing available while preventing the
+        // worker from traversing the real ~/.codex/skills junctions.
+        environment: { CODEX_HOME: codexHome },
         environmentAppend: true,
         stderr: "pipe",
         workdir: directory,
@@ -1043,6 +1081,42 @@ export async function fetchWithTimeout(
   }
 }
 
+/**
+ * Return models advertised by a local Ollama service.  This is deliberately
+ * kept as a small read-only helper so the preferences UI can offer a picker
+ * without making Ollama a required runtime dependency.
+ */
+export async function listOllamaModels(
+  endpoint = "http://127.0.0.1:11434",
+  timeoutMs = 10_000,
+  runtime: {
+    createAbortController?: () => AbortController | undefined;
+    fetch?: typeof fetch;
+  } = {},
+): Promise<string[]> {
+  const base = endpoint.trim().replace(/\/$/, "");
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(base))
+    throw new Error("Ollama 端点必须是本机 localhost/127.0.0.1 地址");
+  const response = await fetchWithTimeout(
+    `${base}/api/tags`,
+    { method: "GET" },
+    timeoutMs,
+    runtime,
+  );
+  if (!response.ok) throw new Error(`Ollama 连接失败：HTTP ${response.status}`);
+  const data = (await response.json()) as {
+    models?: Array<{ name?: unknown; model?: unknown }>;
+  };
+  if (!Array.isArray(data.models)) return [];
+  return Array.from(
+    new Set(
+      data.models
+        .map((entry) => String(entry.name ?? entry.model ?? "").trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+}
+
 function createCompatibleAbortController(): AbortController | undefined {
   const owners: unknown[] = [globalThis];
   try {
@@ -1189,6 +1263,38 @@ function extractionValueSchema(field: FieldDefinition): z.ZodType {
 function getSubprocess(): SubprocessAPI {
   return (ChromeUtils.importESModule(CODEX_MODULE) as any)
     .Subprocess as SubprocessAPI;
+}
+
+/**
+ * Create a transient Codex home containing only the user's auth/provider files.
+ * The normal ~/.codex/skills directory is populated with junctions to the
+ * global skills manager, so inheriting it can make a malformed third-party
+ * SKILL.md abort an otherwise unrelated extraction task.
+ */
+async function prepareIsolatedCodexHome(directory: string): Promise<void> {
+  await IOUtils.makeDirectory(directory, { ignoreExisting: true });
+  const configuredHome = Services.env.get("CODEX_HOME");
+  const profileHome =
+    Services.env.get("USERPROFILE") || Services.env.get("HOME");
+  const sourceHome = configuredHome?.trim()
+    ? configuredHome.trim()
+    : profileHome
+      ? PathUtils.join(profileHome, ".codex")
+      : undefined;
+  if (!sourceHome) return;
+
+  // auth.json is required for ChatGPT login. config.toml carries custom
+  // provider/model routing; neither file causes skill discovery by itself.
+  for (const name of ["auth.json", "config.toml"]) {
+    const source = PathUtils.join(sourceHome, name);
+    if (!(await IOUtils.exists(source))) continue;
+    try {
+      await (IOUtils as any).copy(source, PathUtils.join(directory, name));
+    } catch {
+      // A missing optional file should fall back to Codex's normal diagnostics;
+      // do not hide the actual task error behind staging failures.
+    }
+  }
 }
 
 async function resolveCodexExecutable(

@@ -153,6 +153,20 @@ describe("startup", function () {
     assert.match(result.executable, /codex\.exe$/i);
   });
 
+  it("should complete a Codex structured JSON round-trip in the Zotero sandbox", async function () {
+    this.timeout(120_000);
+    if (
+      !Zotero.Prefs.get(
+        "extensions.zotero-research-database.test.externalAgentEnabled",
+        true,
+      )
+    )
+      this.skip();
+    await new CodexAgentBridge({
+      timeoutMs: 90_000,
+    }).testStructuredOutput();
+  });
+
   it("should reach the local HanaAgent from the Zotero sandbox", async function () {
     if (
       !Zotero.Prefs.get(

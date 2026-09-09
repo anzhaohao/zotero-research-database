@@ -1,7 +1,7 @@
 {
   "name": "zotero-research-database",
   "type": "module",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "description": "Notion-like research database views with an external Codex bridge for Zotero 9",
   "private": true,
   "config": {

@@ -1,5 +1,8 @@
 import { expect } from "chai";
-import { parseAgentProfile } from "../../src/services/agentSettings";
+import {
+  getAgentModelPresets,
+  parseAgentProfile,
+} from "../../src/services/agentSettings";
 
 describe("external Agent settings", function () {
   it("parses a direct JSON process without constructing a shell command", function () {
@@ -52,5 +55,16 @@ describe("external Agent settings", function () {
     expect(hana.endpoint).to.equal(
       "C:\\Users\\anzhaofeng\\.hanako\\server-info.json",
     );
+  });
+
+  it("offers model suggestions per assistant while keeping newer models editable", function () {
+    expect(
+      getAgentModelPresets("codex-cli").map((option) => option.value),
+    ).to.include.members(["", "gpt-5.6-sol"]);
+    expect(
+      getAgentModelPresets("claude-code").map((option) => option.value),
+    ).to.include("claude-sonnet-4-5");
+    expect(getAgentModelPresets("hana-agent")).to.deep.equal([]);
+    expect(getAgentModelPresets("ollama")).to.deep.equal([]);
   });
 });

@@ -3,12 +3,71 @@ import { createDefaultFields } from "../../src/domain/defaults";
 import {
   buildExtractionJSONSchema,
   buildExtractionPrompt,
+  buildCodexWorkerArguments,
+  CODEX_WORKER_FLAGS,
   fetchWithTimeout,
+  listOllamaModels,
   resolveCompatibleWebSocketConstructor,
   validateExtractedValues,
 } from "../../src/services/externalAgent";
 
 describe("external Codex bridge", function () {
+  it("runs Codex workers without optional skills or plugins", function () {
+    const args = buildCodexWorkerArguments(
+      "qwen3.8-27b",
+      "C:\\Temp\\schema.json",
+      "C:\\Temp\\result.json",
+      "C:\\Temp\\worker",
+      "C:\\Papers",
+    );
+    expect(args).to.include.members([
+      "--disable",
+      "plugins",
+      "--disable",
+      "skill_search",
+      "--disable",
+      "skill_mcp_dependency_install",
+    ]);
+    expect(args).to.include.members(["--model", "qwen3.8-27b"]);
+    expect(args).to.include.members(["--add-dir", "C:\\Papers"]);
+    expect(CODEX_WORKER_FLAGS).to.include("--disable");
+  });
+
+  it("lists and sorts models advertised by local Ollama", async function () {
+    const models = await listOllamaModels("http://localhost:11434/", 1_000, {
+      fetch: async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            models: [
+              { name: "qwen3:8b" },
+              { model: "llama3.2" },
+              { name: "qwen3:8b" },
+            ],
+          }),
+        }) as Response,
+    });
+    expect(models).to.deep.equal(["llama3.2", "qwen3:8b"]);
+  });
+
+  it("rejects non-local Ollama endpoints before making a request", async function () {
+    let called = false;
+    let failure: unknown;
+    try {
+      await listOllamaModels("https://example.com", 1_000, {
+        fetch: async () => {
+          called = true;
+          return {} as Response;
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).to.include("本机 localhost/127.0.0.1");
+    expect(called).to.equal(false);
+  });
+
   it("builds a closed JSON Schema for the requested fields", function () {
     const fields = createDefaultFields()
       .filter((field) => field.extraction.enabled)

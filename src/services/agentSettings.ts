@@ -17,6 +17,41 @@ const AGENT_SETTINGS_VERSION = 1;
 const LEGACY_CODEX_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_TIMEOUT_MS = 900_000;
 
+export interface AgentModelOption {
+  value: string;
+  label: string;
+}
+
+/** Stable suggestions only; the input remains editable for newer/custom models. */
+export const AGENT_MODEL_PRESETS: Record<
+  "codex-cli" | "claude-code" | "hana-agent" | "ollama" | "custom-json-process",
+  readonly AgentModelOption[]
+> = {
+  "codex-cli": [
+    { value: "", label: "自动选择（由 Codex 决定）" },
+    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
+    { value: "qwen3.8-27b", label: "Qwen 3.8 27B（中转/自定义）" },
+  ],
+  "claude-code": [
+    { value: "", label: "自动选择（由 Claude 决定）" },
+    { value: "claude-opus-4-1", label: "Claude Opus 4.1" },
+    { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+    { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+  ],
+  "hana-agent": [],
+  ollama: [],
+  "custom-json-process": [],
+};
+
+export function getAgentModelPresets(
+  kind: AgentAdapterKind,
+): readonly AgentModelOption[] {
+  return AGENT_MODEL_PRESETS[kind] || [];
+}
+
 export interface AgentSettingsInput {
   kind: unknown;
   executable: unknown;

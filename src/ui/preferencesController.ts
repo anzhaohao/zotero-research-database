@@ -6,9 +6,14 @@ import type {
 } from "../domain/types";
 import {
   createAgentBridge,
+  listOllamaModels,
   type AgentProfile,
 } from "../services/externalAgent";
-import { AGENT_PRESETS, parseAgentProfile } from "../services/agentSettings";
+import {
+  AGENT_PRESETS,
+  getAgentModelPresets,
+  parseAgentProfile,
+} from "../services/agentSettings";
 import {
   MinerUConversionService,
   parseMinerUProfile,
@@ -118,6 +123,7 @@ export class PreferencesController {
   private root?: HTMLElement;
   private savingLocalSettings = false;
   private agentTesting = false;
+  private agentModelRequestId = 0;
 
   constructor(private win: Window) {}
 
@@ -132,6 +138,7 @@ export class PreferencesController {
     this.loadLocalControls();
     this.bindLocalControls();
     this.bindAgentTests();
+    this.bindAgentModelPicker();
     this.bindArtifactImportToken();
     this.bindModeControls();
     this.updateModeVisibility();
@@ -447,10 +454,80 @@ export class PreferencesController {
         if (endpoint) endpoint.value = preset.endpoint || "";
       }
       this.updateModeVisibility();
+      void this.refreshAgentModelOptions();
     });
     this.root
       ?.querySelector('[data-pref="mineruMode"]')
       ?.addEventListener("change", () => this.updateModeVisibility());
+  }
+
+  /** Add friendly model suggestions while keeping the field editable. */
+  private bindAgentModelPicker(): void {
+    if (!this.root) return;
+    const input = this.root.querySelector<HTMLInputElement>(
+      '[data-pref="agentModel"]',
+    );
+    if (!input) return;
+    const listId = "zrdb-agent-model-options";
+    let list = this.root.querySelector<HTMLDataListElement>(`#${listId}`);
+    if (!list) {
+      list = this.win.document.createElement("datalist");
+      list.id = listId;
+      input.after(list);
+    }
+    input.setAttribute("list", listId);
+    this.root
+      .querySelector('[data-pref="agentEndpoint"]')
+      ?.addEventListener("change", () => {
+        if (String(inputValue(this.root!, "agentKind")) === "ollama")
+          void this.refreshAgentModelOptions();
+      });
+    void this.refreshAgentModelOptions();
+  }
+
+  private async refreshAgentModelOptions(): Promise<void> {
+    if (!this.root) return;
+    const input = this.root.querySelector<HTMLInputElement>(
+      '[data-pref="agentModel"]',
+    );
+    const list = this.root.querySelector<HTMLDataListElement>(
+      "#zrdb-agent-model-options",
+    );
+    if (!input || !list) return;
+    const kind = String(
+      inputValue(this.root, "agentKind"),
+    ) as AgentProfile["kind"];
+    const requestId = ++this.agentModelRequestId;
+    const options = [...getAgentModelPresets(kind)];
+    if (kind === "ollama") {
+      try {
+        const endpoint = String(inputValue(this.root, "agentEndpoint") || "");
+        const timeout = Number(inputValue(this.root, "agentTimeoutMs"));
+        const models = await listOllamaModels(
+          endpoint || undefined,
+          Number.isFinite(timeout) && timeout >= 1000
+            ? Math.min(timeout, 30_000)
+            : 10_000,
+        );
+        for (const model of models)
+          if (!options.some((option) => option.value === model))
+            options.push({ value: model, label: model });
+      } catch {
+        // Keep the editable input usable when Ollama is not running yet.
+      }
+    }
+    if (requestId !== this.agentModelRequestId) return;
+    const current = input.value.trim();
+    if (current && !options.some((option) => option.value === current))
+      options.unshift({ value: current, label: `${current}（当前值）` });
+    list.replaceChildren(
+      ...options.map((option) => {
+        const element = this.win.document.createElement("option");
+        element.value = option.value;
+        element.label = option.label;
+        return element;
+      }),
+    );
   }
 
   private updateModeVisibility(): void {
@@ -520,13 +597,13 @@ export class PreferencesController {
       label.textContent = structured ? "正在检查输出…" : "正在检查助手…";
     try {
       const agent = createAgentBridge(this.profileFromControls());
-      const result = structured
-        ? await (async () => {
-            await agent.testStructuredOutput();
-            return undefined;
-          })()
-        : await agent.probe();
-      if (!structured) await agent.testStructuredOutput();
+      let result: { executable: string; version: string } | undefined;
+      if (structured) {
+        await agent.testStructuredOutput();
+      } else {
+        result = await agent.probe();
+        await agent.testStructuredOutput();
+      }
       if (card) card.className = "zrdb-agent-status-card is-ready";
       if (label) label.textContent = "可用，可以开始提取论文";
       this.status(

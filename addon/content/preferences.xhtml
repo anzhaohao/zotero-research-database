@@ -243,7 +243,12 @@
         ></html:label
       >
       <html:label data-agent-kinds="codex-cli claude-code ollama"
-        >模型（可选） <html:input type="text" data-pref="agentModel"
+        >模型（可选，可点击选择）
+        <html:input
+          type="text"
+          data-pref="agentModel"
+          list="zrdb-agent-model-options"
+          placeholder="点击查看建议，或输入模型 ID"
       /></html:label>
       <html:label data-agent-kinds="ollama hana-agent"
         ><html:span data-agent-endpoint-label="true">本机服务地址</html:span>
