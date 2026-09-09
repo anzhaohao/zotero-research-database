@@ -213,50 +213,69 @@
 
   <html:div class="zrdb-pref-panel" data-pref-panel="agent" hidden="true">
     <html:div class="zrdb-pref-section">
-      <html:h3>外部 Agent</html:h3>
+      <html:h3>论文处理助手</html:h3>
+      <html:p class="zrdb-pref-intro"
+        >选择一个本机助手，用于提取研究字段、翻译标题和生成论文比较结论。普通使用只需要选择助手并检查状态；程序路径、参数和协议细节收在高级设置中。</html:p
+      >
+      <html:div
+        id="zrdb-agent-status-card"
+        class="zrdb-agent-status-card is-unknown"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <html:span class="zrdb-agent-status-kicker">当前助手</html:span>
+        <html:strong id="zrdb-agent-current-name">正在读取设置…</html:strong>
+        <html:span id="zrdb-agent-current-status" class="zrdb-agent-status-text"
+          >尚未检查</html:span
+        >
+      </html:div>
       <html:label
-        >适配器
+        >助手类型
         <html:select data-pref="agentKind"
-          ><html:option value="codex-cli">Codex CLI</html:option
-          ><html:option value="claude-code">Claude Code（本机预设）</html:option
-          ><html:option value="hana-agent">HanaAgent（本机预设）</html:option
-          ><html:option value="ollama">Ollama（本机）</html:option
+          ><html:option value="codex-cli">Codex CLI（推荐）</html:option
+          ><html:option value="claude-code">Claude Code</html:option
+          ><html:option value="hana-agent">HanaAgent（本机服务）</html:option
+          ><html:option value="ollama">Ollama（本机模型）</html:option
           ><html:option value="custom-json-process"
-            >自定义 JSON 进程</html:option
+            >自定义程序（高级）</html:option
           ></html:select
         ></html:label
       >
-      <html:label data-agent-kinds="claude-code hana-agent custom-json-process"
-        >可执行文件
-        <html:input
-          type="text"
-          data-pref="agentExecutable"
-          placeholder="codex 或绝对路径"
-      /></html:label>
-      <html:label data-agent-kinds="custom-json-process"
-        >参数（JSON 数组）
-        <html:input type="text" data-pref="agentArgs" placeholder="[]"
+      <html:label data-agent-kinds="codex-cli claude-code ollama"
+        >模型（可选） <html:input type="text" data-pref="agentModel"
       /></html:label>
       <html:label data-agent-kinds="ollama hana-agent"
-        ><html:span data-agent-endpoint-label="true">本机端点</html:span>
-        <html:input type="text" data-pref="agentEndpoint"
+        ><html:span data-agent-endpoint-label="true">本机服务地址</html:span>
+        <html:input
+          type="text"
+          data-pref="agentEndpoint"
+          placeholder="默认自动检测本机服务"
       /></html:label>
-      <html:label data-agent-kinds="codex-cli claude-code ollama"
-        >模型名 <html:input type="text" data-pref="agentModel"
-      /></html:label>
-      <html:label
-        >超时（毫秒）
-        <html:input type="number" min="1000" data-pref="agentTimeoutMs"
-      /></html:label>
+      <html:div class="zrdb-agent-choice-hint">
+        <html:p
+          ><strong>Codex CLI</strong
+          >：适合大多数论文提取任务，使用本机登录状态。</html:p
+        >
+        <html:p
+          ><strong>Claude Code</strong>：适合已经安装 Claude Code
+          的用户。</html:p
+        >
+        <html:p
+          ><strong>HanaAgent</strong>：连接本机 HanaAgent
+          服务，默认自动读取服务信息。</html:p
+        >
+        <html:p><strong>Ollama</strong>：使用本机模型，适合离线处理。</html:p>
+      </html:div>
       <html:p class="zrdb-pref-warning"
-        >插件不会保存云端 API Key，也不会经过 Shell 拼接命令。连接测试和结构化
-        JSON 校验由外部适配器完成。</html:p
+        >插件不会保存云端 API Key，也不会经过 Shell
+        拼接命令。检查助手不会读取论文，也不会写入研究数据。</html:p
       >
-      <html:div class="zrdb-pref-callout">
-        <html:h4>精读工作流本地接口</html:h4>
+      <html:div class="zrdb-pref-callout zrdb-pref-local-interface">
+        <html:h4>本地接口</html:h4>
         <html:p
           >外部精读工作流向 Zotero
-          回传图表、表格和公式时，需要使用下面的令牌。</html:p
+          回传图表、表格和公式时，使用下面的本地令牌。它与论文处理助手的连接设置相互独立。</html:p
         >
         <html:input
           id="zrdb-artifact-import-token"
@@ -276,10 +295,54 @@
           >轮换后，使用旧令牌的工作流需要更新配置。</html:p
         >
       </html:div>
+      <html:details class="zrdb-pref-advanced">
+        <html:summary>高级设置与排障</html:summary>
+        <html:p
+          >只有在自动检测失败、需要指定程序位置，或接入自定义程序时才需要修改这些选项。</html:p
+        >
+        <html:label
+          data-agent-kinds="claude-code hana-agent custom-json-process"
+          >程序位置
+          <html:input
+            type="text"
+            data-pref="agentExecutable"
+            placeholder="自动检测或填写绝对路径"
+        /></html:label>
+        <html:label data-agent-kinds="custom-json-process"
+          >启动参数（JSON 数组）
+          <html:input
+            type="text"
+            data-pref="agentArgs"
+            placeholder='例如：["--stdio"]'
+        /></html:label>
+        <html:label
+          >最长等待时间
+          <html:select data-pref="agentTimeoutMs">
+            <html:option value="300000">5 分钟</html:option>
+            <html:option value="900000">15 分钟</html:option>
+            <html:option value="1800000">30 分钟</html:option>
+          </html:select>
+        </html:label>
+        <html:div class="zrdb-pref-inline-actions">
+          <html:button
+            type="button"
+            id="zrdb-agent-json-test"
+            aria-busy="false"
+            aria-describedby="zrdb-agent-test-help"
+            >测试结构化输出</html:button
+          >
+        </html:div>
+      </html:details>
+      <html:p id="zrdb-agent-test-help" class="zrdb-pref-help"
+        >检查助手只验证配置和连接；结构化输出测试用于排障，普通使用不需要单独运行。</html:p
+      >
       <html:div class="zrdb-pref-inline-actions">
-        <html:button type="button" id="zrdb-agent-test">连接测试</html:button>
-        <html:button type="button" id="zrdb-agent-json-test"
-          >结构化 JSON 测试</html:button
+        <html:button
+          type="button"
+          id="zrdb-agent-test"
+          aria-busy="false"
+          aria-describedby="zrdb-agent-test-help"
+          >检查助手</html:button
         >
       </html:div>
     </html:div>
@@ -486,9 +549,13 @@
   </html:div>
 
   <html:div class="zrdb-pref-actions"
-    ><html:span id="zrdb-pref-status"></html:span
+    ><html:span
+      id="zrdb-pref-status"
+      role="status"
+      aria-live="polite"
+    ></html:span
     ><html:button type="button" id="zrdb-pref-save"
-      >保存本机设置</html:button
+      >保存并检查</html:button
     ></html:div
   >
 </groupbox>

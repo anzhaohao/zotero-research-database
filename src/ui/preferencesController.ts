@@ -117,6 +117,7 @@ export class PreferencesController {
   private fields: FieldDefinition[] = [];
   private root?: HTMLElement;
   private savingLocalSettings = false;
+  private agentTesting = false;
 
   constructor(private win: Window) {}
 
@@ -258,6 +259,8 @@ export class PreferencesController {
           ? "已保存本机设置；研究数据库目录将在重启 Zotero 后切换"
           : "已保存本机设置",
       );
+      if (this.root.querySelector('[data-pref-tab="agent"].is-active'))
+        await this.testAgent(false);
     } catch (error) {
       this.status(error instanceof Error ? error.message : String(error));
     } finally {
@@ -471,7 +474,16 @@ export class PreferencesController {
     );
     if (endpointLabel)
       endpointLabel.textContent =
-        agentKind === "hana-agent" ? "server-info.json" : "本机端点";
+        agentKind === "hana-agent"
+          ? "服务信息文件（可留空自动检测）"
+          : "本机服务地址";
+    const currentName = this.root.querySelector<HTMLElement>(
+      "#zrdb-agent-current-name",
+    );
+    if (currentName)
+      currentName.textContent =
+        this.root.querySelector<HTMLSelectElement>('[data-pref="agentKind"]')
+          ?.selectedOptions[0]?.textContent || "论文处理助手";
   }
 
   private async testMinerU(): Promise<void> {
@@ -487,18 +499,53 @@ export class PreferencesController {
   }
 
   private async testAgent(structured: boolean): Promise<void> {
+    if (this.agentTesting) return;
+    const buttons = [
+      this.root?.querySelector<HTMLButtonElement>("#zrdb-agent-test"),
+      this.root?.querySelector<HTMLButtonElement>("#zrdb-agent-json-test"),
+    ].filter((button): button is HTMLButtonElement => Boolean(button));
+    this.agentTesting = true;
+    for (const button of buttons) {
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+    }
+    const card = this.root?.querySelector<HTMLElement>(
+      "#zrdb-agent-status-card",
+    );
+    const label = this.root?.querySelector<HTMLElement>(
+      "#zrdb-agent-current-status",
+    );
+    if (card) card.className = "zrdb-agent-status-card is-checking";
+    if (label)
+      label.textContent = structured ? "正在检查输出…" : "正在检查助手…";
     try {
       const agent = createAgentBridge(this.profileFromControls());
-      this.status(structured ? "正在测试结构化 JSON……" : "正在连接 Agent……");
-      if (structured) {
-        await agent.testStructuredOutput();
-        this.status("结构化 JSON 测试通过");
-      } else {
-        const result = await agent.probe();
-        this.status(`连接成功：${result.version}；${result.executable}`);
-      }
+      const result = structured
+        ? await (async () => {
+            await agent.testStructuredOutput();
+            return undefined;
+          })()
+        : await agent.probe();
+      if (!structured) await agent.testStructuredOutput();
+      if (card) card.className = "zrdb-agent-status-card is-ready";
+      if (label) label.textContent = "可用，可以开始提取论文";
+      this.status(
+        structured
+          ? "输出检查通过"
+          : `助手可用：${result?.version || result?.executable}`,
+      );
     } catch (error) {
-      this.status(error instanceof Error ? error.message : String(error));
+      if (card) card.className = "zrdb-agent-status-card is-error";
+      if (label) label.textContent = "需要修复";
+      this.status(
+        `${error instanceof Error ? error.message : String(error)}；请检查高级设置或启动本机服务`,
+      );
+    } finally {
+      this.agentTesting = false;
+      for (const button of buttons) {
+        button.disabled = false;
+        button.setAttribute("aria-busy", "false");
+      }
     }
   }
 

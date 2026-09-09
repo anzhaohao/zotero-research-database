@@ -1499,6 +1499,80 @@ button.zrdb-view-toggle:active {
   background: color-mix(in srgb, CanvasText 5%, Canvas);
   line-height: 1.55;
 }
+
+.zrdb-agent-status-card {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid var(--zrdb-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
+}
+
+.zrdb-agent-status-card.is-ready {
+  border-color: color-mix(in srgb, #2f8f5b 42%, var(--zrdb-line));
+  background: color-mix(in srgb, #2f8f5b 9%, Canvas);
+}
+
+.zrdb-agent-status-card.is-checking {
+  border-color: color-mix(in srgb, var(--zrdb-blue) 42%, var(--zrdb-line));
+  background: var(--zrdb-blue-soft);
+}
+
+.zrdb-agent-status-card.is-error {
+  border-color: color-mix(in srgb, #b44747 42%, var(--zrdb-line));
+  background: color-mix(in srgb, #b44747 8%, Canvas);
+}
+
+.zrdb-agent-status-kicker,
+.zrdb-agent-status-text,
+.zrdb-agent-choice-hint,
+.zrdb-pref-help {
+  color: GrayText;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.zrdb-agent-status-card strong {
+  color: CanvasText;
+  font-size: 14px;
+}
+
+.zrdb-agent-choice-hint {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, CanvasText 4%, Canvas);
+}
+
+.zrdb-agent-choice-hint p {
+  margin: 0;
+}
+
+.zrdb-pref-advanced {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--zrdb-line);
+}
+
+.zrdb-pref-advanced summary {
+  cursor: pointer;
+  color: var(--zrdb-blue);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.zrdb-pref-advanced-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.zrdb-pref-advanced-action {
+  font-size: 11px;
+}
 .zrdb-pref-callout {
   display: grid;
   gap: 6px;
