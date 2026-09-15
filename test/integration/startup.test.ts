@@ -5,6 +5,7 @@ import {
   CodexAgentBridge,
   HanaAgentBridge,
 } from "../../src/services/externalAgent";
+import { readLocalCodexModelCatalog } from "../../src/services/codexModels";
 import { importArtifacts } from "../../src/services/artifactEndpoint";
 import { TRANSLATED_TITLE_FIELD_ID } from "../../src/domain/defaults";
 import { ResearchRepository } from "../../src/storage/repository";
@@ -162,9 +163,52 @@ describe("startup", function () {
       )
     )
       this.skip();
-    await new CodexAgentBridge({
-      timeoutMs: 90_000,
-    }).testStructuredOutput();
+    // Relay providers only accept the qualified catalog id, so the round trip
+    // uses the local catalog instead of the plugin's built-in suggestions.
+    try {
+      const catalog = await readLocalCodexModelCatalog();
+      const relayModel =
+        catalog.models.find((model) => model.value.includes("::"))?.value ??
+        catalog.defaultModel;
+      await new CodexAgentBridge({
+        model: relayModel,
+        timeoutMs: 90_000,
+      }).testStructuredOutput();
+    } catch (error) {
+      assert.fail(`catalog codex round trip failed: ${String(error)}`);
+    }
+  });
+
+  it("should recover a bare relay model name from the local Codex catalog", async function () {
+    this.timeout(180_000);
+    if (
+      !Zotero.Prefs.get(
+        "extensions.zotero-research-database.test.externalAgentEnabled",
+        true,
+      )
+    )
+      this.skip();
+    const catalog = await readLocalCodexModelCatalog();
+    const qualified = catalog.models
+      .map((model) => model.value)
+      .filter((value) => value.includes("::"))
+      .find(
+        (value) =>
+          catalog.models.filter(
+            (other) =>
+              other.value.split("::").pop() === value.split("::").pop(),
+          ).length === 1,
+      );
+    if (!qualified) this.skip();
+    const bare = qualified.split("::").pop() as string;
+    try {
+      await new CodexAgentBridge({
+        model: bare,
+        timeoutMs: 120_000,
+      }).testStructuredOutput();
+    } catch (error) {
+      assert.fail(`bare model ${bare} was not repaired: ${String(error)}`);
+    }
   });
 
   it("should reach the local HanaAgent from the Zotero sandbox", async function () {

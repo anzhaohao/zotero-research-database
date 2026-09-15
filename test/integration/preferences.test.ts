@@ -275,6 +275,11 @@ describe("preferences persistence in the real Zotero settings window", function 
         modelSelect?.querySelector('option[value="gpt-5.6-sol"]'),
         "Codex model choices are visible",
       );
+      assert.isAtLeast(
+        modelSelect?.options.length ?? 0,
+        4,
+        "model picker lists real choices instead of an empty list",
+      );
       if (modelSelect) {
         modelSelect.value = "gpt-5.6-sol";
         modelSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));

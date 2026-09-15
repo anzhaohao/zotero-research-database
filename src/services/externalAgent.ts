@@ -5,16 +5,20 @@ import type {
   FieldDefinition,
 } from "../domain/types";
 import { TRANSLATED_TITLE_FIELD_ID } from "../domain/defaults";
+import {
+  readLocalCodexModelCatalog,
+  resolveCatalogModelId,
+} from "./codexModels";
 
 const CODEX_MODULE = "resource://gre/modules/Subprocess.sys.mjs";
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
  * Codex is used here as a short-lived, non-interactive JSON worker.  Do not
- * inherit optional skill/tool integrations: a malformed global SKILL.md must
- * not become a task dependency. The user's Codex config is intentionally
- * retained because it may contain the authenticated provider/model routing
- * used by the installation.
+ * inherit optional tool integrations, and keep global skills out of the
+ * prompt. Codex 0.152 still discovers `~/.agents/skills`, which only produces
+ * stderr noise for malformed third-party skills; that noise is filtered out of
+ * the user-facing error and never treated as the task failure.
  */
 export const CODEX_WORKER_FLAGS = [
   "--disable",
@@ -35,14 +39,12 @@ export const CODEX_WORKER_FLAGS = [
   "skill_search",
   "--disable",
   "skill_mcp_dependency_install",
-  // Codex 0.152 still discovers the host `.agents/skills` root through the
-  // Windows known profile directory.  Keep the opt-out enabled for versions
-  // that honor it; older versions simply ignore it and are handled by the
-  // diagnostic/output fallback below.
   "--config",
   "features.skip_host_skill_discovery=true",
   "--config",
   "skills.include_instructions=false",
+  "--config",
+  "suppress_unstable_features_warning=true",
   "--ignore-rules",
 ] as const;
 
@@ -79,11 +81,59 @@ export function buildCodexWorkerArguments(
   ];
 }
 
-/** A malformed optional skill can make Codex return code 1 after writing JSON. */
-export function isRecoverableCodexSkillError(stderr: string): boolean {
-  return /failed to load skill[\s\S]*(?:missing YAML frontmatter|delimited by ---)/i.test(
-    stderr,
+/** Startup noise that must never be reported as the reason a task failed. */
+export function isCodexStartupNoise(line: string): boolean {
+  return (
+    /failed to load skill/i.test(line) ||
+    /suppress_unstable_features_warning|Under-development features enabled/i.test(
+      line,
+    ) ||
+    /codex_otel::events|codex_core::shell_snapshot/i.test(line)
   );
+}
+
+/** Keep the actionable part of a failed Codex run. */
+export function extractCodexFailureDetail(
+  stdout: string,
+  stderr: string,
+): string {
+  const lines = `${stderr}\n${stdout}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isCodexStartupNoise(line));
+  const important = lines.filter((line) => /(^|\s)ERROR[:\s]/i.test(line));
+  const pool = important.length ? important : lines;
+  return tail(pool.slice(-3).join(" "), 600);
+}
+
+export function isCodexModelError(text: string): boolean {
+  return /not supported when using|is not available for this group|unknown model|unsupported model|invalid model|model metadata for .* not found/i.test(
+    text,
+  );
+}
+
+function codexFailureMessage(
+  exitCode: number,
+  detail: string,
+  model?: string,
+): string {
+  const chosen = String(model ?? "").trim();
+  const hint = isCodexModelError(detail)
+    ? `；请在“模型”下拉框选择本机可用模型${chosen ? `（当前：${chosen}）` : ""}`
+    : "";
+  return `Codex 任务失败（退出码 ${exitCode}）：${detail || "没有诊断输出"}${hint}`;
+}
+
+async function suggestCatalogModelId(
+  model: string | undefined,
+): Promise<string | undefined> {
+  if (!String(model ?? "").trim()) return undefined;
+  try {
+    const catalog = await readLocalCodexModelCatalog();
+    return resolveCatalogModelId(model, catalog.models);
+  } catch {
+    return undefined;
+  }
 }
 
 interface ProcessHandle {
@@ -330,15 +380,17 @@ export class CodexAgentBridge implements AgentBridge {
     await IOUtils.makeDirectory(directory, { ignoreExisting: true });
     await IOUtils.writeUTF8(schemaPath, JSON.stringify(schema));
     await prepareIsolatedCodexHome(codexHome);
+    const documentDirectory = document?.pdfPath
+      ? parentPath(document.pdfPath)
+      : undefined;
 
-    try {
-      const documentDirectory = document?.pdfPath
-        ? parentPath(document.pdfPath)
-        : undefined;
+    const invoke = async (
+      model: string | undefined,
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
       const process = await subprocess.call({
         command: executable,
         arguments: buildCodexWorkerArguments(
-          this.profile.model,
+          model,
           schemaPath,
           outputPath,
           directory,
@@ -348,9 +400,6 @@ export class CodexAgentBridge implements AgentBridge {
         // worker from traversing the real ~/.codex/skills junctions.
         environment: {
           CODEX_HOME: codexHome,
-          // These names are understood by newer host integrations and are
-          // harmless on older CLIs.  Point them at the transient home so a
-          // global skills-manager junction cannot become a task dependency.
           CODEX_SKILLS_DIR: PathUtils.join(codexHome, "skills"),
           CODEX_HOST_SKILLS_DIR: PathUtils.join(codexHome, "skills"),
           CODEX_DISABLE_HOST_SKILLS: "1",
@@ -360,52 +409,76 @@ export class CodexAgentBridge implements AgentBridge {
         workdir: directory,
       });
       this.running = process;
-      const stdout = process.stdout.readString();
-      const stderr = process.stderr?.readString() || Promise.resolve("");
-      await process.stdin.write(prompt);
-      await process.stdin.close();
-      const result = await waitForProcess(
-        process,
-        this.profile.timeoutMs || DEFAULT_TIMEOUT_MS,
-        "Codex 任务超时，已停止且未写入研究属性",
-      );
-      const output = await stdout;
-      const errors = await stderr;
-      if (result.exitCode !== 0) {
-        if (isRecoverableCodexSkillError(errors)) {
-          try {
-            const content = await Zotero.File.getContentsAsync(
-              outputPath,
-              "utf-8",
-            );
-            if (typeof content === "string" && content.trim()) {
-              try {
-                return JSON.parse(content);
-              } catch {
-                // Fall through to the actionable process error below.
-              }
-            }
-          } catch {
-            // The worker may fail before creating its output file.
-          }
-        }
-        throw new Error(
-          `Codex 任务失败（退出码 ${result.exitCode}）：${tail(
-            errors || output,
-          )}`,
+      try {
+        const stdout = process.stdout.readString();
+        const stderr = process.stderr?.readString() || Promise.resolve("");
+        await process.stdin.write(prompt);
+        await process.stdin.close();
+        const result = await waitForProcess(
+          process,
+          this.profile.timeoutMs || DEFAULT_TIMEOUT_MS,
+          "Codex 任务超时，已停止且未写入研究属性",
         );
+        return {
+          exitCode: result.exitCode,
+          stdout: await stdout,
+          stderr: await stderr,
+        };
+      } finally {
+        this.running = undefined;
       }
-      const content = await Zotero.File.getContentsAsync(outputPath, "utf-8");
-      if (typeof content !== "string" || !content.trim()) {
-        throw new Error("Codex 没有生成结构化结果，未写入研究属性");
+    };
+
+    const readWorkerOutput = async (): Promise<unknown | undefined> => {
+      let content: unknown;
+      try {
+        content = await Zotero.File.getContentsAsync(outputPath, "utf-8");
+      } catch {
+        return undefined;
       }
+      if (typeof content !== "string" || !content.trim()) return undefined;
       try {
         return JSON.parse(content);
-      } catch (error) {
-        throw new Error("Codex 结果不是有效 JSON，未写入研究属性", {
-          cause: error,
-        });
+      } catch {
+        return undefined;
       }
+    };
+
+    try {
+      const attempt = await invoke(this.profile.model);
+      if (attempt.exitCode === 0) {
+        const value = await readWorkerOutput();
+        if (value === undefined)
+          throw new Error("Codex 没有生成结构化结果，未写入研究属性");
+        return value;
+      }
+      // A failed run can still leave a complete final message behind, because
+      // malformed global skills abort the process after the JSON file exists.
+      const recovered = await readWorkerOutput();
+      if (recovered !== undefined) return recovered;
+
+      const detail = extractCodexFailureDetail(attempt.stdout, attempt.stderr);
+      const suggested = isCodexModelError(detail)
+        ? await suggestCatalogModelId(this.profile.model)
+        : undefined;
+      if (suggested && suggested !== this.profile.model) {
+        const retry = await invoke(suggested);
+        const retried =
+          retry.exitCode === 0 ? await readWorkerOutput() : undefined;
+        if (retried !== undefined) return retried;
+        throw new Error(
+          codexFailureMessage(
+            retry.exitCode,
+            retry.exitCode === 0
+              ? "Codex 没有生成结构化结果，未写入研究属性"
+              : extractCodexFailureDetail(retry.stdout, retry.stderr),
+            suggested,
+          ),
+        );
+      }
+      throw new Error(
+        codexFailureMessage(attempt.exitCode, detail, this.profile.model),
+      );
     } finally {
       this.running = undefined;
       await IOUtils.remove(directory, { recursive: true, ignoreAbsent: true });

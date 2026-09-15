@@ -5,8 +5,10 @@ import {
   buildExtractionPrompt,
   buildCodexWorkerArguments,
   CODEX_WORKER_FLAGS,
+  extractCodexFailureDetail,
   fetchWithTimeout,
-  isRecoverableCodexSkillError,
+  isCodexModelError,
+  isCodexStartupNoise,
   listOllamaModels,
   resolveCompatibleWebSocketConstructor,
   validateExtractedValues,
@@ -32,21 +34,45 @@ describe("external Codex bridge", function () {
       "features.skip_host_skill_discovery=true",
       "--config",
       "skills.include_instructions=false",
+      "--config",
+      "suppress_unstable_features_warning=true",
     ]);
     expect(args).to.include.members(["--model", "qwen3.8-27b"]);
     expect(args).to.include.members(["--add-dir", "C:\\Papers"]);
     expect(CODEX_WORKER_FLAGS).to.include("--disable");
   });
 
-  it("recognizes malformed optional skill errors as recoverable", function () {
+  it("treats malformed optional skills as startup noise, not as the failure", function () {
     expect(
-      isRecoverableCodexSkillError(
+      isCodexStartupNoise(
         "failed to load skill C:\\skills\\officecli\\SKILL.md: missing YAML frontmatter delimited by ---",
       ),
     ).to.equal(true);
-    expect(isRecoverableCodexSkillError("authentication failed")).to.equal(
-      false,
+    expect(
+      isCodexStartupNoise(
+        "warning: Under-development features enabled: skip_host_skill_discovery.",
+      ),
+    ).to.equal(true);
+    expect(isCodexStartupNoise("ERROR: authentication failed")).to.equal(false);
+  });
+
+  it("reports the actionable error instead of the skill noise", function () {
+    const detail = extractCodexFailureDetail(
+      'ERROR: {"detail":"The \\u0027k3-256k\\u0027 model is not supported when using Codex with a ChatGPT account."}',
+      [
+        "2026-09-15T13:18:56.446078Z ERROR codex_core::session::session: failed to load skill C:\\Users\\x\\.skills-manager\\skills\\caveman\\SKILL.md: missing YAML frontmatter delimited by ---",
+        "warning: Under-development features enabled: skip_host_skill_discovery.",
+      ].join("\n"),
     );
+    expect(detail).to.include("model is not supported");
+    expect(detail).to.not.include("failed to load skill");
+    expect(isCodexModelError(detail)).to.equal(true);
+    expect(
+      isCodexModelError(
+        'ERROR: Model "gpt-6-astra" is not available for this group',
+      ),
+    ).to.equal(true);
+    expect(isCodexModelError("ERROR: permission denied")).to.equal(false);
   });
 
   it("lists and sorts models advertised by local Ollama", async function () {

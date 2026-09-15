@@ -15,6 +15,10 @@ import {
   parseAgentProfile,
 } from "../services/agentSettings";
 import {
+  readLocalCodexModelCatalog,
+  resolveCatalogModelId,
+} from "../services/codexModels";
+import {
   MinerUConversionService,
   parseMinerUProfile,
 } from "../services/mineru";
@@ -507,7 +511,39 @@ export class PreferencesController {
       inputValue(this.root, "agentKind"),
     ) as AgentProfile["kind"];
     const requestId = ++this.agentModelRequestId;
-    const options = [...getAgentModelPresets(kind)];
+    const presets = [...getAgentModelPresets(kind)];
+    let options = presets;
+    let codexHint = "";
+    if (kind === "codex-cli") {
+      const catalog = await readLocalCodexModelCatalog().catch(() => ({
+        models: [],
+        defaultModel: undefined,
+      }));
+      const catalogOptions = catalog.models.map((model) => ({
+        value: model.value,
+        label:
+          model.value === catalog.defaultModel
+            ? `${model.label}（本机默认）`
+            : model.label,
+      }));
+      if (catalogOptions.length)
+        options = [
+          ...presets.slice(0, 1),
+          ...catalogOptions,
+          ...presets
+            .slice(1)
+            .filter(
+              (preset) =>
+                !catalogOptions.some((option) => option.value === preset.value),
+            ),
+        ];
+      const chosen = input.value.trim();
+      const resolved = resolveCatalogModelId(chosen, catalog.models);
+      if (resolved && resolved !== chosen)
+        codexHint = `本机实际模型 ID 是 ${resolved}，运行时会自动改用该 ID。`;
+      else if (chosen && !resolved)
+        codexHint = "该模型不在本机 Codex 可用列表中，运行可能失败。";
+    }
     if (kind === "ollama") {
       try {
         const endpoint = String(inputValue(this.root, "agentEndpoint") || "");
@@ -548,6 +584,13 @@ export class PreferencesController {
     else if (current) select.value = "__custom__";
     else select.value = options[0]?.value || "";
     input.hidden = select.value !== "__custom__";
+    const help = this.root.querySelector<HTMLElement>("#zrdb-agent-model-help");
+    if (help)
+      help.textContent =
+        codexHint ||
+        (kind === "ollama"
+          ? "可从本机 Ollama 读取模型；未启动服务时也可以手动填写。"
+          : "从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。");
   }
 
   private updateModeVisibility(): void {
@@ -634,8 +677,11 @@ export class PreferencesController {
     } catch (error) {
       if (card) card.className = "zrdb-agent-status-card is-error";
       if (label) label.textContent = "需要修复";
+      const message = error instanceof Error ? error.message : String(error);
       this.status(
-        `${error instanceof Error ? error.message : String(error)}；请检查高级设置或启动本机服务`,
+        /请在|请选择|请先/.test(message)
+          ? message
+          : `${message}；请检查高级设置或启动本机服务`,
       );
     } finally {
       this.agentTesting = false;
