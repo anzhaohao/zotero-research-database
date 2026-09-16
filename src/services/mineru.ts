@@ -13,6 +13,7 @@ const DOCKER_EXECUTABLE_PATH =
   "E:\\software\\docker\\resources\\bin\\docker.exe";
 const DOCKER_DESKTOP_PATH = "E:\\software\\docker\\Docker Desktop.exe";
 const DOCKER_START_TIMEOUT_MS = 4 * 60 * 1000;
+const LLM_FOR_ZOTERO_MINERU_CACHE_DIR = "llm-for-zotero-mineru";
 
 interface ProcessHandle {
   stdin: { close(): Promise<unknown> };
@@ -295,6 +296,7 @@ export class MinerUConversionService {
     onProgress: (progress: MinerUProgress) => void,
   ): Promise<void> {
     this.cancelled = false;
+    const reuseCache = getPref("mineruReuseLlmForZoteroCache") === true;
     for (const item of items) {
       if (this.cancelled) {
         onProgress({
@@ -315,6 +317,84 @@ export class MinerUConversionService {
         const pdfPath = await pdf.getFilePathAsync();
         if (!pdfPath) throw new Error("主 PDF 文件不在本机，无法转换");
         this.throwIfCancelled();
+        if (reuseCache) {
+          const cacheDir = await findLlmForZoteroMineruCache(pdf.id);
+          if (cacheDir) {
+            const result = await mineruResultFromLlmForZoteroCache(cacheDir);
+            this.throwIfCancelled();
+            if (result.markdown.trim()) {
+              onProgress({
+                itemKey: item.key,
+                state: "running",
+                message:
+                  "已复用 llm-for-zotero 的 MinerU 缓存，正在复制到研究数据库",
+              });
+              await IOUtils.makeDirectory(directory, { ignoreExisting: true });
+              const baseName = safeBaseName(pdfPath);
+              const title = `【MinerU原文】${baseName}.md`;
+              const markdownPath = PathUtils.join(directory, title);
+              await IOUtils.writeUTF8(markdownPath, result.markdown);
+              this.throwIfCancelled();
+              const figureArtifacts = [];
+              for (const figure of result.figures) {
+                this.throwIfCancelled();
+                const extension = safeImageExtension(figure.imageName);
+                const imageHash = await sha256Bytes(figure.bytes);
+                const imagePath = PathUtils.join(
+                  directory,
+                  `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
+                );
+                await (IOUtils as any).write(imagePath, figure.bytes);
+                this.throwIfCancelled();
+                figureArtifacts.push({
+                  role: figure.kind,
+                  path: imagePath,
+                  sha256: imageHash,
+                  title:
+                    figure.caption.trim() ||
+                    `${figure.kind === "table" ? "表格" : "图"} · 第 ${figure.pageIndex + 1} 页`,
+                  figure: {
+                    id: figure.id,
+                    caption: figure.caption,
+                    pageIndex: figure.pageIndex,
+                    rect: figure.rect,
+                    sourcePdfAttachmentKey: pdf.key,
+                  },
+                } as const);
+              }
+              onProgress({
+                itemKey: item.key,
+                state: "running",
+                message: "正在导入 Zotero 条目",
+              });
+              // Zotero attachment creation is not safely cancellable. Once
+              // this point is reached, finish the import and report its real
+              // outcome.
+              this.importing = true;
+              await importArtifacts({
+                libraryID: item.libraryID,
+                parentItemKey: item.key,
+                workflowRunID: `mineru-${Date.now()}-${item.key}`,
+                artifacts: [
+                  {
+                    role: "mineru-original",
+                    path: markdownPath,
+                    sha256: await sha256Text(result.markdown),
+                    title,
+                  },
+                  ...figureArtifacts,
+                ],
+              });
+              this.importing = false;
+              onProgress({
+                itemKey: item.key,
+                state: "success",
+                message: `已复用 llm-for-zotero 缓存：${title} 与 ${result.figures.length} 个图表已导入条目`,
+              });
+              continue;
+            }
+          }
+        }
         onProgress({
           itemKey: item.key,
           state: "running",
@@ -1035,6 +1115,93 @@ export function buildMinerUDockerComposeArguments(
     "--no-build",
     "mineru-api",
   ];
+}
+
+/**
+ * Locate the llm-for-zotero MinerU cache directory for a given source
+ * attachment. Returns the per-attachment cache directory when it contains a
+ * non-empty full.md, otherwise an empty string. The directory layout is
+ * `<ZoteroDataDir>/llm-for-zotero-mineru/<attachmentID>/full.md`.
+ */
+export async function findLlmForZoteroMineruCache(
+  attachmentID: number,
+): Promise<string> {
+  if (!Number.isFinite(attachmentID) || attachmentID <= 0) return "";
+  const zotero = Zotero as unknown as {
+    DataDirectory?: { dir?: string };
+  };
+  const dataDir = zotero.DataDirectory?.dir;
+  if (!dataDir) return "";
+  const itemDir = PathUtils.join(
+    dataDir,
+    LLM_FOR_ZOTERO_MINERU_CACHE_DIR,
+    String(attachmentID),
+  );
+  const fullMdPath = PathUtils.join(itemDir, "full.md");
+  try {
+    if (!(await IOUtils.exists(fullMdPath))) return "";
+    const markdown = toText(
+      await Zotero.File.getContentsAsync(fullMdPath, "utf-8"),
+    );
+    if (!markdown.trim()) return "";
+    return itemDir;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Read a cached llm-for-zotero MinerU result from its per-attachment cache
+ * directory. Reuses the same content_list.json parsing as the other MinerU
+ * backends so figure captions, page indices and bounding boxes are preserved.
+ */
+export async function mineruResultFromLlmForZoteroCache(
+  itemDir: string,
+): Promise<MinerUConversionResult> {
+  const fullMdPath = PathUtils.join(itemDir, "full.md");
+  const markdown = toText(
+    await Zotero.File.getContentsAsync(fullMdPath, "utf-8"),
+  );
+  if (!markdown.trim())
+    throw new Error("llm-for-zotero MinerU 缓存中没有 Markdown");
+  const paths = await findFiles(itemDir, () => true);
+  const relativeNames = paths
+    .map((path) => relativeLocalPath(itemDir, path))
+    .filter(Boolean);
+  const absoluteByRelativeName = new Map(
+    paths
+      .map((path) => [relativeLocalPath(itemDir, path), path] as const)
+      .filter(([name]) => Boolean(name)),
+  );
+  const figureMap = new Map<string, MinerUParsedFigure>();
+  for (const manifestPath of paths.filter((path) => isContentListName(path))) {
+    let rows: unknown[];
+    try {
+      rows = mineruContentRows(
+        JSON.parse(
+          toText(await Zotero.File.getContentsAsync(manifestPath, "utf-8")),
+        ) as unknown,
+      );
+    } catch {
+      continue;
+    }
+    const manifestName = relativeLocalPath(itemDir, manifestPath);
+    for (const value of rows) {
+      const descriptor = mineruFigureDescriptor(
+        value,
+        manifestName,
+        relativeNames,
+      );
+      if (!descriptor) continue;
+      const imagePath = absoluteByRelativeName.get(descriptor.imageName);
+      if (!imagePath) continue;
+      figureMap.set(descriptor.id, {
+        ...descriptor,
+        bytes: await IOUtils.read(imagePath),
+      });
+    }
+  }
+  return { markdown, figures: [...figureMap.values()] };
 }
 
 export async function mineruResultFromDirectory(

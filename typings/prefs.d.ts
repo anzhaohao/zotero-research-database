@@ -55,6 +55,7 @@ declare namespace _ZoteroTypes {
       "mineruEnableTable": boolean;
       "mineruTimeoutMs": number;
       "mineruSettingsVersion": number;
+      "mineruReuseLlmForZoteroCache": boolean;
     };
   }
 }

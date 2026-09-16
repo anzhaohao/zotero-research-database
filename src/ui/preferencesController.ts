@@ -86,6 +86,7 @@ const prefKeys = [
   "mineruEnableFormula",
   "mineruEnableTable",
   "mineruTimeoutMs",
+  "mineruReuseLlmForZoteroCache",
 ] as const;
 
 const fieldTypes: Array<[FieldType, string]> = [

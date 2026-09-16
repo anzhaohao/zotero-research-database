@@ -2,9 +2,11 @@ import { expect } from "chai";
 import {
   buildSelfHostedMultipartBody,
   buildMinerUDockerComposeArguments,
+  findLlmForZoteroMineruCache,
   markdownFromZip,
   MinerUConversionService,
   mineruDesktopHistoryPathFromConfig,
+  mineruResultFromLlmForZoteroCache,
   mineruResultFromZip,
   parseMinerUProfile,
   readMinerUProfile,
@@ -575,6 +577,123 @@ describe("MinerU integration", function () {
       restoreFetch();
       restorePath();
       restoreIO();
+    }
+  });
+
+  it("locates a valid llm-for-zotero MinerU cache by attachment ID", async function () {
+    const restoreZotero = replaceGlobal("Zotero", {
+      DataDirectory: { dir: "D:\\ZoteroData" },
+      File: {
+        getContentsAsync: async () => "# Cached Paper\n\n正文",
+      },
+    });
+    const restoreIO = replaceGlobal("IOUtils", {
+      exists: async (path: string) => path.endsWith("full.md"),
+    });
+    const restorePath = replaceGlobal("PathUtils", {
+      join: (...parts: string[]) => parts.join("\\"),
+    });
+    try {
+      const found = await findLlmForZoteroMineruCache(2453);
+      expect(found).to.equal("D:\\ZoteroData\\llm-for-zotero-mineru\\2453");
+      expect(await findLlmForZoteroMineruCache(0)).to.equal("");
+      expect(await findLlmForZoteroMineruCache(-1)).to.equal("");
+    } finally {
+      restorePath();
+      restoreIO();
+      restoreZotero();
+    }
+  });
+
+  it("returns empty when llm-for-zotero cache is missing or blank", async function () {
+    const restoreZotero = replaceGlobal("Zotero", {
+      DataDirectory: { dir: "D:\\ZoteroData" },
+      File: { getContentsAsync: async () => "   " },
+    });
+    const restoreIO = replaceGlobal("IOUtils", {
+      exists: async () => true,
+    });
+    const restorePath = replaceGlobal("PathUtils", {
+      join: (...parts: string[]) => parts.join("\\"),
+    });
+    try {
+      expect(await findLlmForZoteroMineruCache(99)).to.equal("");
+    } finally {
+      restorePath();
+      restoreIO();
+      restoreZotero();
+    }
+  });
+
+  it("reads full.md and figures from an llm-for-zotero cache directory", async function () {
+    const imageBytes = Uint8Array.from([9, 8, 7]);
+    const files: Record<string, Uint8Array | string> = {
+      "D:\\cache\\2453\\full.md": "# Cached\n\n正文",
+      "D:\\cache\\2453\\paper_content_list.json": JSON.stringify([
+        {
+          type: "image",
+          img_path: "images/fig1.png",
+          image_caption: ["Figure 1", "Overview"],
+          page_idx: 3,
+          bbox: [50, 60, 550, 660],
+        },
+      ]),
+      "D:\\cache\\2453\\images": "",
+      "D:\\cache\\2453\\images\\fig1.png": imageBytes,
+    };
+    const restoreZotero = replaceGlobal("Zotero", {
+      File: {
+        getContentsAsync: async (path: string) => files[path],
+      },
+    });
+    const directories = new Set(["D:\\cache\\2453\\images"]);
+    const restoreIO = replaceGlobal("IOUtils", {
+      getChildren: async (dir: string) =>
+        Object.keys(files).filter((path) => {
+          if (!path.startsWith(dir + "\\")) return false;
+          const rest = path.slice(dir.length + 1);
+          return rest !== "" && !rest.includes("\\");
+        }),
+      stat: async (path: string) => ({
+        type: directories.has(path) ? "directory" : "file",
+      }),
+      read: async (path: string) => files[path],
+    });
+    const restorePath = replaceGlobal("PathUtils", {
+      join: (...parts: string[]) => parts.join("\\"),
+    });
+    try {
+      const result = await mineruResultFromLlmForZoteroCache("D:\\cache\\2453");
+      expect(result.markdown).to.equal("# Cached\n\n正文");
+      expect(result.figures).to.have.length(1);
+      const figure = result.figures[0];
+      expect(figure.kind).to.equal("figure");
+      expect(figure.caption).to.equal("Figure 1 Overview");
+      expect(figure.pageIndex).to.equal(3);
+      expect(figure.rect?.x).to.be.closeTo(0.05, 1e-9);
+      expect([...figure.bytes]).to.deep.equal([9, 8, 7]);
+    } finally {
+      restorePath();
+      restoreIO();
+      restoreZotero();
+    }
+  });
+
+  it("throws when the cached full.md is empty", async function () {
+    const restoreZotero = replaceGlobal("Zotero", {
+      File: { getContentsAsync: async () => "  " },
+    });
+    const restorePath = replaceGlobal("PathUtils", {
+      join: (...parts: string[]) => parts.join("\\"),
+    });
+    try {
+      await mineruResultFromLlmForZoteroCache("D:\\cache\\2453");
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect((error as Error).message).to.include("没有 Markdown");
+    } finally {
+      restorePath();
+      restoreZotero();
     }
   });
 });

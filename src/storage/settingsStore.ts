@@ -56,6 +56,7 @@ export const PORTABLE_SETTING_KEYS = [
   "mineruEnableFormula",
   "mineruEnableTable",
   "mineruTimeoutMs",
+  "mineruReuseLlmForZoteroCache",
 ] as const;
 
 type RuntimeIO = {

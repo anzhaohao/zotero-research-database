@@ -496,6 +496,21 @@
         ><html:input type="checkbox" data-pref="mineruEnableTable" />
         识别表格</html:label
       >
+      <html:div class="zrdb-pref-callout"
+        ><html:h4>复用 llm-for-zotero</html:h4
+        ><html:label
+          ><html:input
+            type="checkbox"
+            data-pref="mineruReuseLlmForZoteroCache"
+          />
+          优先复用 llm-for-zotero 插件的 MinerU 转换结果</html:label
+        ><html:p
+          >勾选后，每次转换会先检查 llm-for-zotero 的缓存目录（Zotero
+          数据目录下的 llm-for-zotero-mineru）。若该 PDF 已有解析结果，直接把
+          Markdown 和图表复制到研究数据库，不再重复运行
+          MinerU。缓存缺失或损坏时自动回退到正常转换。</html:p
+        ></html:div
+      >
       <html:label
         >超时（毫秒）
         <html:input type="number" min="10000" data-pref="mineruTimeoutMs"

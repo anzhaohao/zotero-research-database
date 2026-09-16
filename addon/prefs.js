@@ -52,3 +52,4 @@ pref("mineruEnableFormula", true);
 pref("mineruEnableTable", true);
 pref("mineruTimeoutMs", 3600000);
 pref("mineruSettingsVersion", 0);
+pref("mineruReuseLlmForZoteroCache", false);
