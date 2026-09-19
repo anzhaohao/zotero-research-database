@@ -16,10 +16,17 @@ interface ItemTreeRowLike {
   ref?: Zotero.Item;
 }
 
+interface ItemTreeRowProviderLike {
+  _rows: ItemTreeRowLike[];
+  _rowMap?: Record<string | number, number>;
+  refreshRowMap?: () => void;
+}
+
 interface ItemTreeLike {
   _rows: ItemTreeRowLike[];
   _rowMap?: Record<string | number, number>;
   _refreshRowMap: () => void;
+  rowProvider?: ItemTreeRowProviderLike;
   toggleOpenState: (...args: any[]) => unknown;
   refreshAndMaintainSelection: (...args: any[]) => unknown;
   refresh?: (...args: any[]) => unknown;
@@ -54,6 +61,29 @@ export class NativeArtifactVisibilityController {
     if (!tree || this.originalToggle || this.originalRefresh) return false;
     this.originalToggle = tree.toggleOpenState;
     this.originalRefresh = tree.refreshAndMaintainSelection;
+
+    // Zotero 10 declares `get _rowMap()` on ItemTree without a setter, but
+    // LibraryTree._refreshRowMap() still assigns `this._rowMap = ...` which
+    // hits the getter-only property. Install an instance-level shim that
+    // forwards the assignment to rowProvider._rowMap so the inherited method
+    // works without touching Zotero's class definition.
+    const provider = tree.rowProvider;
+    if (provider) {
+      const existing = Object.getOwnPropertyDescriptor(tree, "_rowMap");
+      if (!existing?.set) {
+        const providerRef = provider;
+        Object.defineProperty(tree, "_rowMap", {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return providerRef._rowMap ?? {};
+          },
+          set(value: Record<string | number, number>) {
+            providerRef._rowMap = value;
+          },
+        });
+      }
+    }
 
     this.wrappedToggle = (...args: any[]) => {
       const result = this.originalToggle!.apply(tree, args);
@@ -136,8 +166,19 @@ export class NativeArtifactVisibilityController {
       return !hidden;
     });
     if (rows.length === tree._rows.length) return;
-    tree._rows = rows;
-    tree._refreshRowMap();
+    // Zotero 10 exposes _rows as a getter-only property backed by
+    // rowProvider. Mutate the underlying array in place via splice so the
+    // filter works on both Zotero 9 (direct _rows) and Zotero 10
+    // (rowProvider.rows).
+    const provider = tree.rowProvider;
+    if (provider && Array.isArray(provider._rows)) {
+      provider._rows.splice(0, provider._rows.length, ...rows);
+    } else {
+      tree._rows.splice(0, tree._rows.length, ...rows);
+    }
+    if (typeof tree._refreshRowMap === "function") tree._refreshRowMap();
+    else if (typeof provider?.refreshRowMap === "function")
+      provider.refreshRowMap();
     tree.tree?.invalidate?.();
   }
 
@@ -211,10 +252,12 @@ export class NativeArtifactVisibilityController {
 
 function isCompatibleItemTree(value: unknown): value is ItemTreeLike {
   const tree = value as Partial<ItemTreeLike> | undefined;
+  const provider = tree?.rowProvider;
   return Boolean(
     tree &&
-    Array.isArray(tree._rows) &&
-    typeof tree._refreshRowMap === "function" &&
+    (Array.isArray(tree._rows) || Array.isArray(provider?._rows)) &&
+    (typeof tree._refreshRowMap === "function" ||
+      typeof provider?.refreshRowMap === "function") &&
     typeof tree.toggleOpenState === "function" &&
     typeof tree.refreshAndMaintainSelection === "function",
   );

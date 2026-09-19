@@ -1822,44 +1822,43 @@ describe("startup", function () {
   });
 
   it("should deduplicate imported figure child attachments and update the manifest", async function () {
-    const parent = new Zotero.Item("journalArticle");
-    parent.libraryID = Zotero.Libraries.userLibraryID;
-    parent.setField("title", "ZRDB figure import test");
-    await parent.saveTx();
-    const path = PathUtils.join(
-      PathUtils.tempDir,
-      `zrdb-figure-${Date.now()}.png`,
-    );
-    const base64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-    const bytes = Uint8Array.from(atob(base64), (character) =>
-      character.charCodeAt(0),
-    );
-    await (IOUtils as any).write(path, bytes);
-    const hash = Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-    )
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    const request = {
-      libraryID: parent.libraryID,
-      parentItemKey: parent.key,
-      workflowRunID: "figure-test",
-      artifacts: [
-        {
-          role: "figure" as const,
-          path,
-          sha256: hash,
-          title: "Figure 1",
-          figure: {
-            id: "fig-1",
-            caption: "测试图",
-            pageIndex: 0,
-          },
-        },
-      ],
-    };
+    let parent: Zotero.Item | undefined;
+    let path = "";
     try {
+      parent = new Zotero.Item("journalArticle");
+      parent.libraryID = Zotero.Libraries.userLibraryID;
+      parent.setField("title", "ZRDB figure import test");
+      await parent.saveTx();
+      path = PathUtils.join(PathUtils.tempDir, `zrdb-figure-${Date.now()}.png`);
+      const base64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+      const bytes = Uint8Array.from(atob(base64), (character) =>
+        character.charCodeAt(0),
+      );
+      await (IOUtils as any).write(path, bytes);
+      const hash = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+      )
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+      const request = {
+        libraryID: parent.libraryID,
+        parentItemKey: parent.key,
+        workflowRunID: "figure-test",
+        artifacts: [
+          {
+            role: "figure" as const,
+            path,
+            sha256: hash,
+            title: "Figure 1",
+            figure: {
+              id: "fig-1",
+              caption: "测试图",
+              pageIndex: 0,
+            },
+          },
+        ],
+      };
       const first = (await importArtifacts(request)) as any;
       const second = (await importArtifacts(request)) as any;
       assert.equal(first.artifacts[0].status, "imported");
@@ -1967,10 +1966,14 @@ describe("startup", function () {
         itemTree._rows.some((row: any) => row.ref?.id === children[0].id),
         "re-enabling the preference hides the managed row again",
       );
+    } catch (error) {
+      const stack =
+        error instanceof Error ? error.stack || error.message : String(error);
+      throw new Error(`figure dedup test diagnostic:\n${stack}`);
     } finally {
       setPref("hideMinerUArtifactsInNativeList", true);
-      await IOUtils.remove(path, { ignoreAbsent: true });
-      await parent.eraseTx();
+      if (path) await IOUtils.remove(path, { ignoreAbsent: true });
+      if (parent) await parent.eraseTx();
     }
   });
 

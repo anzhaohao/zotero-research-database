@@ -483,7 +483,7 @@ export class MainViewController {
       sorted,
       (id) => {
         try {
-          return Zotero.Items.get(id);
+          return Zotero.Items.get(id) || undefined;
         } catch {
           return undefined;
         }
