@@ -172,8 +172,7 @@ async function cachedDataUrl(cachePath: string): Promise<string | undefined> {
     // described it as a synchronous string return.
     return await Promise.resolve(
       Zotero.File.generateDataURI(cachePath, "image/png") as unknown as
-        | string
-        | Promise<string>,
+        string | Promise<string>,
     );
   } catch {
     return undefined;

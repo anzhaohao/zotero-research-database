@@ -145,7 +145,7 @@ export async function readLocalCodexModelCatalog(): Promise<CodexModelCatalog> {
   if (!home) return { models: [] };
   const configPath = PathUtils.join(home, "config.toml");
   if (!(await IOUtils.exists(configPath))) return { models: [] };
-  let routing: CodexConfigRouting = {};
+  let routing: CodexConfigRouting;
   try {
     routing = parseCodexConfigRouting(
       String(await Zotero.File.getContentsAsync(configPath, "utf-8")),

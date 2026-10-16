@@ -219,11 +219,7 @@ export interface AgentResult<T> {
 }
 
 export type AgentAdapterKind =
-  | "codex-cli"
-  | "claude-code"
-  | "hana-agent"
-  | "ollama"
-  | "custom-json-process";
+  "codex-cli" | "claude-code" | "hana-agent" | "ollama" | "custom-json-process";
 
 export interface AgentProfile {
   kind: AgentAdapterKind;

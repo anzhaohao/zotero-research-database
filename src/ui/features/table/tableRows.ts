@@ -1,12 +1,10 @@
 import { readLru, writeLru } from "../../../core/lruCache";
 
 export type TableFlatRow<Item> =
-  | { type: "group"; label: string }
-  | { type: "item"; item: Item };
+  { type: "group"; label: string } | { type: "item"; item: Item };
 
 type CachedTableFlatRow =
-  | { type: "group"; label: string }
-  | { type: "item"; itemKey: string };
+  { type: "group"; label: string } | { type: "item"; itemKey: string };
 
 /**
  * Flattens the table's optional grouping into the row model consumed by the

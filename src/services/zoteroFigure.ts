@@ -457,8 +457,7 @@ export async function readZoteroFigureImage(
         path: raw,
         dataUrl: await Promise.resolve(
           Zotero.File.generateDataURI(raw, imageMime(raw)) as unknown as
-            | string
-            | Promise<string>,
+            string | Promise<string>,
         ),
       };
     }
@@ -471,8 +470,7 @@ export async function readZoteroFigureImage(
     path: outputPath,
     dataUrl: await Promise.resolve(
       Zotero.File.generateDataURI(outputPath, image.mimeType) as unknown as
-        | string
-        | Promise<string>,
+        string | Promise<string>,
     ),
   };
 }

@@ -286,7 +286,7 @@ describe("bundled formula assets", function () {
     const installed = JSON.parse(
       readFileSync("node_modules/katex/package.json", "utf8"),
     );
-    assert.equal(pkg.dependencies.katex, "0.16.22");
+    assert.equal(pkg.dependencies.katex, "0.19.0");
     assert.equal(lock.packages[""].dependencies.katex, pkg.dependencies.katex);
     assert.equal(
       lock.packages["node_modules/katex"].version,

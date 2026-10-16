@@ -11,8 +11,7 @@ import type {
 import { parseRecordPayload, parseWorkspacePayload } from "../core/codec";
 
 export function getMigrationSyncedSettings():
-  | _ZoteroTypes.ResearchMigrationSyncedSettings
-  | undefined {
+  _ZoteroTypes.ResearchMigrationSyncedSettings | undefined {
   const syncedSettings = Zotero.SyncedSettings;
   if (
     !syncedSettings ||

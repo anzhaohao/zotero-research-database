@@ -115,9 +115,7 @@ function isCheckboxControl(
 
 function inputValue(root: Element, key: string): string | boolean {
   const control = root.querySelector(`[data-pref="${key}"]`) as
-    | HTMLInputElement
-    | HTMLSelectElement
-    | null;
+    HTMLInputElement | HTMLSelectElement | null;
   if (!control) return "";
   return isCheckboxControl(control) ? control.checked : control.value;
 }
@@ -184,9 +182,7 @@ export class PreferencesController {
     if (!this.root) return;
     for (const key of prefKeys) {
       const control = this.root.querySelector(`[data-pref="${key}"]`) as
-        | HTMLInputElement
-        | HTMLSelectElement
-        | null;
+        HTMLInputElement | HTMLSelectElement | null;
       if (!control) continue;
       const value = getPref(key);
       if (isCheckboxControl(control)) control.checked = Boolean(value);

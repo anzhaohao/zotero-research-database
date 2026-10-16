@@ -128,8 +128,7 @@ function windowDiagnostics(win: Window | undefined): string {
 function mostRecentPreferencesWindow(): Window | undefined {
   try {
     return Services.wm.getMostRecentWindow("zotero:pref") as unknown as
-      | Window
-      | undefined;
+      Window | undefined;
   } catch {
     // Diagnostic fallback must not mask the original failure (e.g. Services
     // being unavailable in the test realm).
@@ -201,8 +200,7 @@ describe("preferences persistence in the real Zotero settings window", function 
       stage = "close existing isolated preferences window";
       await closePreferences(
         Services.wm.getMostRecentWindow("zotero:pref") as unknown as
-          | Window
-          | undefined,
+          Window | undefined,
       );
       stage = "seed baseline preferences";
       for (const [key, value] of Object.entries(expected)) {

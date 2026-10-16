@@ -33,7 +33,9 @@ describe("database table exports", function () {
     try {
       blob = await tableToXLSX(columns, rows);
     } catch (error) {
-      throw new Error(`XLSX generation failed: ${String(error)}`);
+      throw new Error(`XLSX generation failed: ${String(error)}`, {
+        cause: error,
+      });
     }
     expect(blob.size).to.be.greaterThan(0);
     // Zotero's privileged window can generate/download the Blob, but its test
@@ -44,13 +46,17 @@ describe("database table exports", function () {
     try {
       buffer = await blob.arrayBuffer();
     } catch (error) {
-      throw new Error(`XLSX Blob read failed: ${String(error)}`);
+      throw new Error(`XLSX Blob read failed: ${String(error)}`, {
+        cause: error,
+      });
     }
     let zip: JSZip;
     try {
       zip = await JSZip.loadAsync(buffer);
     } catch (error) {
-      throw new Error(`XLSX ZIP parse failed: ${String(error)}`);
+      throw new Error(`XLSX ZIP parse failed: ${String(error)}`, {
+        cause: error,
+      });
     }
     expect(zip.file("xl/worksheets/sheet1.xml")).not.to.equal(null);
     const styles = await zip.file("xl/styles.xml")!.async("string");

@@ -11,14 +11,7 @@ export type FieldType =
 
 /** A semantic colour token, rather than an arbitrary CSS value. */
 export type ViewColor =
-  | "none"
-  | "blue"
-  | "green"
-  | "yellow"
-  | "orange"
-  | "red"
-  | "purple"
-  | "gray";
+  "none" | "blue" | "green" | "yellow" | "orange" | "red" | "purple" | "gray";
 
 export type CitationStyle = "zotero" | "gbt7714" | "apa7" | "nature" | "ieee";
 export type FigureKind = "figure" | "table" | "formula";
@@ -44,11 +37,7 @@ export interface FieldDefinition {
 
 export interface FieldAudit {
   executor:
-    | "codex"
-    | "external-agent"
-    | "manual"
-    | "import"
-    | "legacy-provider";
+    "codex" | "external-agent" | "manual" | "import" | "legacy-provider";
   executorVersion: string;
   inputType: "mineru-markdown" | "pdf-fulltext" | "manual" | "import";
   inputHash: string;
@@ -172,10 +161,7 @@ export interface FigureArtifact {
 }
 
 export type ArtifactRole =
-  | "mineru-original"
-  | "translation"
-  | "figure"
-  | "table";
+  "mineru-original" | "translation" | "figure" | "table";
 
 /**
  * Plugin-owned attachment metadata. It lives in the parent item's local

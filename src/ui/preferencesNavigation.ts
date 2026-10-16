@@ -20,16 +20,13 @@ export async function openResearchPreferences(
   // Zotero 9's openPreferences focuses an existing window and returns it;
   // otherwise it creates the preferences dialog with the requested pane.
   let win = internal.openPreferences("zrdb-preferences", {}) as
-    | Window
-    | null
-    | undefined;
+    Window | null | undefined;
 
   const deadline = Date.now() + 2_500;
   while (Date.now() < deadline) {
     if (!win)
       win = Services.wm.getMostRecentWindow("zotero:pref") as unknown as
-        | Window
-        | undefined;
+        Window | undefined;
     if (!win) {
       await Zotero.Promise.delay(50);
       continue;

@@ -57,8 +57,7 @@ function decodeMultipart(
   cursor += 2;
   const fields: Record<string, string> = {};
   let file:
-    | { name: string; contentType: string; bytes: Uint8Array }
-    | undefined;
+    { name: string; contentType: string; bytes: Uint8Array } | undefined;
   let partCount = 0;
 
   while (cursor < body.length) {
@@ -592,6 +591,7 @@ describe("MinerU integration", function () {
             ? `${error.name}: ${error.message}\n${error.stack || ""}`
             : String(error)
         }`,
+        { cause: error },
       );
     }
 

@@ -1931,8 +1931,7 @@ function mineruJobOutputFileID(
   const files = Array.isArray(job.files) ? job.files : [];
   for (const entry of files) {
     const outputs = (entry as Record<string, unknown>)?.output_files as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     const target = outputs?.[format] as Record<string, unknown> | undefined;
     const fileID = String(target?.file_id || "");
     if (fileID) return fileID;
@@ -1944,8 +1943,7 @@ function mineruJobError(job: Record<string, unknown>): string {
   const files = Array.isArray(job.files) ? job.files : [];
   for (const entry of files) {
     const error = (entry as Record<string, unknown>)?.error as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     const message = String(error?.message || error?.code || "");
     if (message) return message;
   }

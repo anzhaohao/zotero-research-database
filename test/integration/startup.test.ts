@@ -1981,7 +1981,9 @@ describe("startup", function () {
     } catch (error) {
       const stack =
         error instanceof Error ? error.stack || error.message : String(error);
-      throw new Error(`figure dedup test diagnostic:\n${stack}`);
+      throw new Error(`figure dedup test diagnostic:\n${stack}`, {
+        cause: error,
+      });
     } finally {
       setPref("hideMinerUArtifactsInNativeList", true);
       if (path) await IOUtils.remove(path, { ignoreAbsent: true });

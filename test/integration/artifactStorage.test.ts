@@ -192,7 +192,9 @@ describe("P3 linked artifact storage", function () {
               .map((key) => `${key}=${String((error as any)[key])}`)
               .join("; ")
           : String(error);
-      throw new Error(`P3 linked storage test failed: ${details}`);
+      throw new Error(`P3 linked storage test failed: ${details}`, {
+        cause: error,
+      });
     } finally {
       setArtifactStorageRoot(previousRoot);
       await parent.eraseTx();
@@ -326,7 +328,9 @@ describe("P3 linked artifact storage", function () {
               .map((key) => `${key}=${String((error as any)[key])}`)
               .join("; ")
           : String(error);
-      throw new Error(`P3 linked storage test failed: ${details}`);
+      throw new Error(`P3 linked storage test failed: ${details}`, {
+        cause: error,
+      });
     } finally {
       setArtifactStorageRoot(previousRoot);
       setPref(ARTIFACT_STORAGE_MIGRATION_PREF, previousMigrationVersion);
