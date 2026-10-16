@@ -20,6 +20,10 @@ interface ItemTreeRowProviderLike {
   _rows: ItemTreeRowLike[];
   _rowMap?: Record<string | number, number>;
   refreshRowMap?: () => void;
+  onUpdate?: {
+    addListener: (listener: (...args: any[]) => unknown) => void;
+    removeListener: (listener: (...args: any[]) => unknown) => void;
+  };
 }
 
 interface ItemTreeLike {
@@ -46,6 +50,7 @@ export class NativeArtifactVisibilityController {
   private originalRefresh?: ItemTreeLike["refreshAndMaintainSelection"];
   private wrappedToggle?: ItemTreeLike["toggleOpenState"];
   private wrappedRefresh?: ItemTreeLike["refreshAndMaintainSelection"];
+  private rowProviderUpdateListener?: (...args: any[]) => Promise<void>;
   private hiddenParentIDs = new Set<number>();
 
   constructor(
@@ -82,6 +87,19 @@ export class NativeArtifactVisibilityController {
             providerRef._rowMap = value;
           },
         });
+      }
+
+      // Zotero 10 moved row mutations (opening restored containers, expanding
+      // multiple rows, sorting and notifier updates) into ItemTreeRowProvider.
+      // Most of those paths do not call ItemTree.toggleOpenState or
+      // refreshAndMaintainSelection, so listen to the provider's single update
+      // event as the authoritative point at which rebuilt child rows can be
+      // filtered again.
+      if (provider.onUpdate?.addListener) {
+        this.rowProviderUpdateListener = async () => {
+          if (this.enabled) await this.refresh();
+        };
+        provider.onUpdate.addListener(this.rowProviderUpdateListener);
       }
     }
 
@@ -187,6 +205,12 @@ export class NativeArtifactVisibilityController {
     if (!tree) return;
     this.enabled = false;
     this.generation++;
+    if (this.rowProviderUpdateListener) {
+      tree.rowProvider?.onUpdate?.removeListener(
+        this.rowProviderUpdateListener,
+      );
+      this.rowProviderUpdateListener = undefined;
+    }
     let restored = false;
     if (this.originalToggle && tree.toggleOpenState === this.wrappedToggle) {
       tree.toggleOpenState = this.originalToggle;

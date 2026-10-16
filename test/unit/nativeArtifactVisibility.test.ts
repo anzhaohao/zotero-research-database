@@ -80,6 +80,81 @@ describe("native MinerU artifact visibility", function () {
     expect(refreshCalls).to.be.greaterThan(0);
   });
 
+  it("filters rows rebuilt directly by the Zotero 10 row provider", async function () {
+    const parent = {
+      id: 101,
+      key: "PARENT10",
+      libraryID: 1,
+      isRegularItem: () => true,
+    } as Zotero.Item;
+    const managed = {
+      id: 202,
+      key: "MINERU10",
+      parentItemID: 101,
+    } as Zotero.Item;
+    const rows = [
+      { level: 0, ref: parent },
+      { level: 1, ref: managed },
+    ];
+    const listeners = new Set<(...args: any[]) => unknown>();
+    const provider = {
+      _rows: rows,
+      _rowMap: { 101: 0, 202: 1 } as Record<number, number>,
+      refreshRowMap() {
+        this._rowMap = Object.fromEntries(
+          this._rows.map((row, index) => [row.ref.id, index]),
+        );
+      },
+      onUpdate: {
+        addListener(listener: (...args: any[]) => unknown) {
+          listeners.add(listener);
+        },
+        removeListener(listener: (...args: any[]) => unknown) {
+          listeners.delete(listener);
+        },
+      },
+    };
+    const tree = {
+      rowProvider: provider,
+      get _rows() {
+        return provider._rows;
+      },
+      get _rowMap() {
+        return provider._rowMap;
+      },
+      _refreshRowMap() {
+        provider.refreshRowMap();
+      },
+      toggleOpenState() {},
+      async refreshAndMaintainSelection() {},
+      tree: { invalidate() {} },
+    };
+    const repository = {
+      loadAllArtifacts: async () => [
+        { attachmentKey: "MINERU10", role: "mineru-original" },
+      ],
+    } as unknown as ResearchRepository;
+    const controller = new NativeArtifactVisibilityController(tree, repository);
+
+    expect(controller.install(true)).to.equal(true);
+    await controller.refresh();
+    expect(provider._rows.map((row) => row.ref.key)).to.deep.equal([
+      "PARENT10",
+    ]);
+
+    // Zotero 10 restores open containers through rowProvider methods without
+    // calling the ItemTree methods wrapped by the Zotero 9 compatibility path.
+    provider._rows.push({ level: 1, ref: managed });
+    provider.refreshRowMap();
+    for (const listener of listeners) await listener(true, {});
+    expect(provider._rows.map((row) => row.ref.key)).to.deep.equal([
+      "PARENT10",
+    ]);
+
+    controller.destroy();
+    expect(listeners.size).to.equal(0);
+  });
+
   it("fails open and warns exactly once on an incompatible Zotero ItemTree", function () {
     const originalZotero = (globalThis as any).Zotero;
     const warnings: string[] = [];

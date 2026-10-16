@@ -1949,6 +1949,18 @@ describe("startup", function () {
         `managed MinerU figure is hidden without deleting the attachment; child=${children[0].key}`,
       );
 
+      // Zotero 10 restores and refreshes open containers inside rowProvider,
+      // bypassing ItemTree.toggleOpenState. The provider update listener must
+      // remove managed rows again before the update settles.
+      itemTree.rowProvider._refreshContainer(parentRow);
+      await itemTree.rowProvider.runListeners("update", true, {
+        restoreSelection: true,
+      });
+      assert.isFalse(
+        itemTree._rows.some((row: any) => row.ref?.id === children[0].id),
+        "Zotero 10 rowProvider rebuild keeps managed artifacts hidden",
+      );
+
       setPref("hideMinerUArtifactsInNativeList", false);
       for (let attempt = 0; attempt < 40; attempt++) {
         if (itemTree._rows.some((row: any) => row.ref?.id === children[0].id)) {
