@@ -2111,7 +2111,12 @@ function safeImageExtension(path: string): string {
 }
 
 async function sha256Bytes(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  // @types/node 26 typed Uint8Array as Uint8Array<ArrayBufferLike>; hashing
+  // requires a plain ArrayBuffer view.
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    bytes as Uint8Array<ArrayBuffer>,
+  );
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");

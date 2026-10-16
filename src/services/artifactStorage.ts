@@ -796,7 +796,12 @@ export function unregisterArtifactStorageNotifier(
 
 export async function sha256File(path: string): Promise<string> {
   const bytes = await IOUtils.read(path);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  // @types/node 26 typed Uint8Array as Uint8Array<ArrayBufferLike>; IOUtils
+  // always returns a plain ArrayBuffer view, so narrow it before hashing.
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    bytes as Uint8Array<ArrayBuffer>,
+  );
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
