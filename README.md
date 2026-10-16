@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 - “字段、列与外部工具”二级菜单保留“Agent、MinerU 与主 PDF”综合入口，并增加“MinerU 转换”快捷入口；快捷入口直接打开综合页面的 MinerU 标签，不新增顶栏按钮。统一页面支持切换 Codex CLI、Claude Code、HanaAgent、本地 Ollama 和直接启动的自定义 JSON Agent；自定义进程只使用标准输入/输出，不经过 Shell，插件也不保存云端 API Key。
 - 每次提取会重新读取本机 Agent 设置，不再沿用数据库视图首次打开时的旧配置。参与提取且未被人工锁定的属性格会显示 Apple 风格细圆环，并依次提示读取全文、Agent 处理和保存阶段；成功短暂显示对勾，失败保留警示圆环，悬停可查看完整原因。
 - 完整原文仍用于输入哈希和审计；超过 `20,000` 字符时，实际 Agent 输入改为摘要/引言、方法、结果、讨论、结论、正文中段和文末等重点片段。Codex 提取固定使用 `low` 推理，配置的模型名与超时会真实传入进程；旧版 `120000ms` 默认超时会一次性迁移为 `900000ms`。
-- MinerU 支持 Desktop、官方网页 API 和 Docker/本地服务三种模式。Desktop 会投递主 PDF 并提示用户在客户端点击一次“立即解析”，随后自动读取 `%USERPROFILE%\MinerU\config.json` 中的历史目录，等待新的 `full.md`、`content_list*.json` 和图片稳定后回传；Docker 模式在本机服务未运行时可自动启动 Docker Desktop 与 `E:\software\DockerProject\MinerU` 的 `mineru-api` Compose 服务。三种模式都会把结果作为 `【MinerU原文】<PDF名称>.md` 存储型附件放到对应条目下，图表写入论文图表 manifest，重复结果按角色与 SHA-256 去重。设置中的“在 Zotero 原生列表隐藏 MinerU 产物”默认勾选，只在本机视图隐藏插件 manifest 标记的 Markdown/图表子附件；取消勾选立即恢复显示，不删除附件或改变同步数据。
+- MinerU 支持 Desktop、官方网页 API 和 Docker/本地服务三种模式。Desktop 会投递主 PDF 并提示用户在客户端点击一次“立即解析”，随后自动读取 `%USERPROFILE%\MinerU\config.json` 中的历史目录，等待新的 `full.md`、`content_list*.json` 和图片稳定后回传；Docker 模式在本机服务未运行时可自动启动 Docker Desktop 与 `E:\software\DockerProject\MinerU` 的 `mineru-api` Compose 服务，并同时兼容 MinerU 4.x（v1 接口 + 质量档）与 3.x（`/file_parse`）服务。三种模式都会把结果作为 `【MinerU原文】<PDF名称>.md` 存储型附件放到对应条目下，图表写入论文图表 manifest，重复结果按角色与 SHA-256 去重。设置中的“在 Zotero 原生列表隐藏 MinerU 产物”默认勾选，只在本机视图隐藏插件 manifest 标记的 Markdown/图表子附件；取消勾选立即恢复显示，不删除附件或改变同步数据。
 - 每篇条目可在统一外部工具页面显式指定主 PDF，选择结果写入该条目的内部同步记录，不改名、不移动也不修改 PDF。未指定时按“附件标题恰好为 `PDF` → Zotero 最佳附件 → 第一个 PDF”的顺序自动选择；首页预览、MinerU 转换和 PDF 全文回退使用同一附件。
 - 内容优先读取 Zotero 条目下的 `【MinerU原文】*.md`，缺失时回退到主 PDF 的 Zotero 本地全文。
 - 支持动态比较、固定快照、调用外部 Agent 生成综合结论，以及 CSV、XLSX、HTML 和系统打印 PDF 导出。
@@ -75,10 +75,12 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 # 本机 Docker MinerU
 
 - 部署目录：`E:\software\DockerProject\MinerU`。
-- 当前镜像：`mineru:3.4.4-vllm0.21.0`，包含 MinerU `3.4.4`、vLLM `0.21.0` 和 PyTorch `2.11.0+cu130`。
+- 当前镜像：`mineru:4.0.2-vllm0.21.0`，包含 MinerU `4.0.2`、vLLM `0.21.0` 和 PyTorch `2.11.0+cu130`。
 - API 只绑定 `127.0.0.1:8000`，插件的“本地部署”地址填写 `http://127.0.0.1:8000`。
 - 启动命令：`docker compose --profile api up -d --no-build mineru-api`；状态与日志分别使用 `docker compose --profile api ps` 和 `docker compose --profile api logs --tail 200 mineru-api` 检查。
-- 插件会先检查 `/health`；不可用时启动 Docker Desktop，再以固定参数启动上述 Compose 服务并等待健康状态。转换优先使用 MinerU 3.x 的同步 `/file_parse` ZIP 协议，遇到不提供该端点的兼容服务时才回退到 `/tasks` 队列协议。
+- 启动命令需要镜像已存在（首次先 `docker compose --profile api build`）；插件以 `--no-build` 启动，不会在转换时触发构建。
+- 健康检查先请求 `/v1/health`（MinerU 4.x），404 时回退 `/health`（3.x）；服务不可用时先启动 Docker Desktop，再以固定参数启动上述 Compose 服务并等待健康状态。
+- 转换优先走 MinerU 4.x 的 v1 接口：`POST /v1/uploads` 建上传 → `PUT .../content` 传字节 → `POST .../complete` 取 `file_id` → `POST /v1/parse/jobs` 建任务（带 `tier`）→ 轮询 `GET /v1/parse/jobs/{id}` → `GET /v1/files/{file_id}/content` 下载结果 ZIP。端点对 `/v1/uploads` 明确返回 404/405 时才回退到 3.x 的同步 `/file_parse` ZIP 协议，再回退 `/tasks` 队列协议。
 - 2026-08-04 已确认容器健康、RTX 4060 Laptop GPU 可见，并核对 `/tasks`、`/tasks/{id}`、`/tasks/{id}/result` 与 ZIP 结果协议；随后使用正式 Zotero 条目 `A8FHXTDH` 的主 PDF 完成端到端转换，约 25 秒生成 54,263 字符 Markdown 和 14 张带页码、坐标的图表。
 - 2026-08-15 再用正式条目 `X9QP2AAG`《空气激光的原理、产生及应用》完成插件内 Docker 自动启动、PDF 上传、Markdown/12 个图表解析、Zotero 导入和重复运行去重闭环。相同 Docker 结果再次转换时附件键没有增加。
 

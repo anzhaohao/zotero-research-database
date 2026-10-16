@@ -75,6 +75,19 @@ describe("external Codex bridge", function () {
     expect(isCodexModelError("ERROR: permission denied")).to.equal(false);
   });
 
+  it("never reports an empty reason when only startup noise was captured", function () {
+    const detail = extractCodexFailureDetail(
+      "",
+      [
+        "2026-09-18T11:28:22.072759Z ERROR codex_core::session::session: failed to load skill C:\\skills\\caveman\\SKILL.md: missing YAML frontmatter",
+        "warning: Under-development features enabled: skip_host_skill_discovery.",
+      ].join("\n"),
+    );
+    expect(detail).to.not.equal("");
+    expect(detail).to.include("仅捕获到启动噪声");
+    expect(extractCodexFailureDetail("", "")).to.equal("");
+  });
+
   it("lists and sorts models advertised by local Ollama", async function () {
     const models = await listOllamaModels("http://localhost:11434/", 1_000, {
       fetch: async () =>

@@ -843,3 +843,20 @@ npm run build                           ✔ production
 - Agent、外部工作流本地令牌和 MinerU 说明在设置页中分开表达；状态节点增加 `role=status`、`aria-live` 和检查中/可用/需修复状态。
 - 保存按钮改为“保存并检查”，测试期间禁用重复点击，并将错误文案补充为下一步建议。
 - 验证：179 项单元测试、TypeScript、ESLint、Prettier 和设置宿主定向回归 1 项通过；生产包重新生成。
+
+## 2026-09-18 MinerU 4.x 适配（Docker 覆盖升级 3.4.4 → 4.0.2）
+
+- 本地 MinerU Docker 项目由 `mineru:3.4.4-vllm0.21.0` 覆盖升级为 `mineru:4.0.2-vllm0.21.0`。4.0 是破坏性发布：`mineru -p ... --backend pipeline` 改为 `mineru-kit parse --tier`；质量档 `flash/basic/standard/advanced` 取代 `pipeline/vlm/hybrid`；服务入口统一为 `mineru-kit`（`api-server`/`vlm-server`/`router`/`webui`）；健康检查迁到 `/v1/health`；基础镜像仍为 vLLM `0.21.0`。
+- 插件新增 4.x 流程 `convertWithV1Api`：建上传 → 传字节 → 完成上传取 `file_id` → 建解析任务（携带 `tier`）→ 轮询 → 下载结果 ZIP。`/v1/uploads` 返回 404/405 时自动回退 3.x 的 `/file_parse`，再回退 `/tasks`，三种协议按序降级。
+- 结果解析兼容三份清单：3.x `*_content_list.json`、4.x `structured_content.json`（图片字段为 `image_source`、标题在顶层 `captions`）与 4.x `middle_json.json`（图片字段为 `image_path`、标题嵌套在 `content[]`），按图表 ID 去重，避免同一图表重复导入。
+- `MinerUProfile` 新增 `tier`（默认 `standard`），随便携设置白名单、备份列表与偏好面板登记；设置页新增“解析质量档”下拉，“本地后端”标注为仅 MinerU 3.x 服务与 Desktop 客户端使用，并把该字段的可见模式扩展到 Desktop。
+- 验证：`npm run test:unit` 194 passing（新增 4.x 全流程回归，覆盖上传字节、任务请求体与图表映射）；`npx tsc --noEmit`、ESLint、Prettier 通过；对真实 4.0.2 服务以与代码完全一致的请求序列端到端跑通，61 秒返回 77,801 字节 ZIP，图表 id/标题/归一化区域映射正确。生产包已替换安装，Zotero 9.0.6 启动后迁移把 `mineruSettingsVersion` 写为 `3`，确认新代码生效。
+
+## 2026-09-18 外部 Agent 模型 ID 修复（Codex 中转短名）
+
+- 现象：Codex CLI 字段提取报 `外部 Agent 处理失败：Codex 任务失败（退出码 1）：没有诊断输出`。
+- 根因：设置中保存的模型是短名 `k3-256k`，而本机 Codex 经本地中转（`config.toml` 的 `model = "aimami_relay_f0611e18c2::k3-256k"`）只接受带前缀的完整 id，Codex 收到短名直接拒绝并退出 1。同参数实测：短名退出码 1，完整 id 退出码 0 且返回合法 JSON。
+- 修复一（运行时）：首次调用前先用本机 Codex 目录解析已保存的模型名（`resolveCatalogModelId` 唯一后缀匹配），命中则直接用完整 id，不再依赖失败后的重试分支；解析不到时沿用原值，行为不变。
+- 修复二（存储）：设置页刷新模型列表时把解析结果写回 `agentModel`，配置不再长期停留在短名，下拉框也能显示真实 id。
+- 修复三（诊断）：`extractCodexFailureDetail` 在只剩启动噪声时返回带标注的尾部（`仅捕获到启动噪声`），避免空白诊断既误导用户、又让自动修复分支无法触发。
+- 验证：`npm run test:unit` 195 passing（新增“仅剩噪声也必须给出诊断”回归）、`npx tsc --noEmit`、ESLint 通过；生产包已替换安装并在 Zotero 9.0.6 中加载。

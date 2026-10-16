@@ -103,7 +103,16 @@ export function extractCodexFailureDetail(
     .filter((line) => line && !isCodexStartupNoise(line));
   const important = lines.filter((line) => /(^|\s)ERROR[:\s]/i.test(line));
   const pool = important.length ? important : lines;
-  return tail(pool.slice(-3).join(" "), 600);
+  if (pool.length) return tail(pool.slice(-3).join(" "), 600);
+  // Nothing but startup noise was captured. Report it explicitly instead of an
+  // empty reason, so a silent failure still leaves a diagnosable clue.
+  const raw = `${stderr}\n${stdout}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return raw.length
+    ? `（仅捕获到启动噪声）${tail(raw.slice(-2).join(" "), 300)}`
+    : "";
 }
 
 export function isCodexModelError(text: string): boolean {
@@ -445,7 +454,13 @@ export class CodexAgentBridge implements AgentBridge {
     };
 
     try {
-      const attempt = await invoke(this.profile.model);
+      // Relay providers reject a bare model name such as `k3-256k`, and Codex
+      // refuses it before any retry can repair the value. Resolve the saved name
+      // through the local catalog up front so the first attempt already uses the
+      // `relay::model` id the provider expects.
+      const resolvedModel =
+        (await suggestCatalogModelId(this.profile.model)) ?? this.profile.model;
+      const attempt = await invoke(resolvedModel);
       if (attempt.exitCode === 0) {
         const value = await readWorkerOutput();
         if (value === undefined)
@@ -461,7 +476,7 @@ export class CodexAgentBridge implements AgentBridge {
       const suggested = isCodexModelError(detail)
         ? await suggestCatalogModelId(this.profile.model)
         : undefined;
-      if (suggested && suggested !== this.profile.model) {
+      if (suggested && suggested !== resolvedModel) {
         const retry = await invoke(suggested);
         const retried =
           retry.exitCode === 0 ? await readWorkerOutput() : undefined;
@@ -477,7 +492,7 @@ export class CodexAgentBridge implements AgentBridge {
         );
       }
       throw new Error(
-        codexFailureMessage(attempt.exitCode, detail, this.profile.model),
+        codexFailureMessage(attempt.exitCode, detail, resolvedModel),
       );
     } finally {
       this.running = undefined;

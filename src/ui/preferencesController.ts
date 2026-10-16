@@ -80,6 +80,7 @@ const prefKeys = [
   "mineruDockerExecutable",
   "mineruDockerDesktopExecutable",
   "mineruBackend",
+  "mineruTier",
   "mineruMethod",
   "mineruModelVersion",
   "mineruLanguage",
@@ -540,10 +541,15 @@ export class PreferencesController {
         ];
       const chosen = input.value.trim();
       const resolved = resolveCatalogModelId(chosen, catalog.models);
-      if (resolved && resolved !== chosen)
-        codexHint = `本机实际模型 ID 是 ${resolved}，运行时会自动改用该 ID。`;
-      else if (chosen && !resolved)
+      if (resolved && resolved !== chosen) {
+        // Repair the stored short name once, so the setting stops carrying a value
+        // the relay provider rejects and the picker shows the real id.
+        codexHint = `本机实际模型 ID 是 ${resolved}，已自动改用并保存。`;
+        input.value = resolved;
+        setPref("agentModel", resolved);
+      } else if (chosen && !resolved) {
         codexHint = "该模型不在本机 Codex 可用列表中，运行可能失败。";
+      }
     }
     if (kind === "ollama") {
       try {
@@ -732,6 +738,7 @@ export class PreferencesController {
         "mineruDockerDesktopExecutable",
       ),
       backend: inputValue(this.root, "mineruBackend"),
+      tier: inputValue(this.root, "mineruTier"),
       method: inputValue(this.root, "mineruMethod"),
       modelVersion: inputValue(this.root, "mineruModelVersion"),
       language: inputValue(this.root, "mineruLanguage"),

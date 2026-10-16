@@ -45,6 +45,7 @@ pref(
   "E:\\software\\docker\\Docker Desktop.exe",
 );
 pref("mineruBackend", "pipeline");
+pref("mineruTier", "standard");
 pref("mineruMethod", "auto");
 pref("mineruModelVersion", "vlm");
 pref("mineruLanguage", "ch");

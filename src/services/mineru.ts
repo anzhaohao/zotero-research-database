@@ -6,7 +6,7 @@ import { getPref, setPref } from "../utils/prefs";
 
 const SUBPROCESS_MODULE = "resource://gre/modules/Subprocess.sys.mjs";
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
-const MINERU_SETTINGS_VERSION = 2;
+const MINERU_SETTINGS_VERSION = 3;
 const MINERU_DESKTOP_PATH = "E:\\software\\MinerU\\MinerU.exe";
 const MINERU_DOCKER_PROJECT_PATH = "E:\\software\\DockerProject\\MinerU";
 const DOCKER_EXECUTABLE_PATH =
@@ -41,6 +41,20 @@ interface DesktopDirectorySnapshot {
 
 export type MinerUMode = "local-client" | "official-api" | "self-hosted";
 
+export type MinerUTier = "flash" | "basic" | "standard" | "advanced";
+
+const MINERU_TIERS: MinerUTier[] = ["flash", "basic", "standard", "advanced"];
+
+/** MinerU 4.x replaced the 3.x backend choice with four quality tiers. */
+export function mineruTier(value: unknown): MinerUTier {
+  const text = String(value ?? "")
+    .trim()
+    .toLocaleLowerCase();
+  return (MINERU_TIERS as string[]).includes(text)
+    ? (text as MinerUTier)
+    : "standard";
+}
+
 export interface MinerUProfile {
   mode: MinerUMode;
   executable: string;
@@ -54,6 +68,7 @@ export interface MinerUProfile {
   dockerExecutable: string;
   dockerDesktopExecutable: string;
   backend: string;
+  tier: MinerUTier;
   method: "auto" | "txt" | "ocr";
   modelVersion: "pipeline" | "vlm";
   language: string;
@@ -96,6 +111,7 @@ export interface MinerUSettingsInput {
   dockerExecutable?: unknown;
   dockerDesktopExecutable?: unknown;
   backend: unknown;
+  tier?: unknown;
   method: unknown;
   modelVersion: unknown;
   language: unknown;
@@ -180,6 +196,7 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
       String(input.dockerDesktopExecutable || DOCKER_DESKTOP_PATH).trim() ||
       DOCKER_DESKTOP_PATH,
     backend: String(input.backend || "pipeline").trim() || "pipeline",
+    tier: mineruTier(input.tier),
     method,
     modelVersion,
     language: String(input.language || "ch").trim() || "ch",
@@ -206,6 +223,7 @@ export function readMinerUProfile(): MinerUProfile {
     dockerExecutable: getPref("mineruDockerExecutable"),
     dockerDesktopExecutable: getPref("mineruDockerDesktopExecutable"),
     backend: getPref("mineruBackend"),
+    tier: mineruTier(getPref("mineruTier")),
     method: getPref("mineruMethod"),
     modelVersion: getPref("mineruModelVersion"),
     language: getPref("mineruLanguage"),
@@ -231,6 +249,7 @@ export function saveMinerUProfile(profile: MinerUProfile): void {
   setPref("mineruDockerExecutable", profile.dockerExecutable);
   setPref("mineruDockerDesktopExecutable", profile.dockerDesktopExecutable);
   setPref("mineruBackend", profile.backend);
+  setPref("mineruTier", profile.tier);
   setPref("mineruMethod", profile.method);
   setPref("mineruModelVersion", profile.modelVersion);
   setPref("mineruLanguage", profile.language);
@@ -259,6 +278,8 @@ export function migrateMinerUPreferences(): void {
     if (!String(getPref("mineruDockerDesktopExecutable") || "").trim())
       setPref("mineruDockerDesktopExecutable", DOCKER_DESKTOP_PATH);
   }
+  if (!String(getPref("mineruTier") || "").trim())
+    setPref("mineruTier", "standard");
   setPref("mineruSettingsVersion", MINERU_SETTINGS_VERSION);
 }
 
@@ -644,7 +665,7 @@ export class MinerUConversionService {
     }
     if (this.cancelled) throw new Error("已取消 MinerU Docker 启动");
     throw new Error(
-      `MinerU 容器已提交启动，但 ${this.profile.selfHostedEndpoint}/health 在 ${DOCKER_START_TIMEOUT_MS / 1000} 秒内未就绪`,
+      `MinerU 容器已提交启动，但 ${this.profile.selfHostedEndpoint}/v1/health 在 ${DOCKER_START_TIMEOUT_MS / 1000} 秒内未就绪`,
     );
   }
 
@@ -872,6 +893,163 @@ export class MinerUConversionService {
     }
   }
 
+  /**
+   * MinerU 4.x flow: create upload -> put content -> complete -> parse job -> poll
+   * -> download the result archive. Returns undefined when the endpoint does not
+   * expose the v1 API so the caller can fall back to the 3.x protocol.
+   */
+  private async convertWithV1Api(
+    bytes: Uint8Array,
+    fileName: string,
+    pdfPath: string,
+    deadline: number,
+  ): Promise<MinerUConversionResult | undefined> {
+    const endpoint = this.profile.selfHostedEndpoint;
+    const created = await fetchWithTimeout(
+      `${endpoint}/v1/uploads`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename: fileName,
+          bytes: bytes.byteLength,
+          mime_type: "application/pdf",
+          purpose: "parse",
+        }),
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if ([404, 405].includes(created.status)) return undefined;
+    if (!created.ok)
+      throw new Error(
+        `MinerU 上传初始化失败：HTTP ${created.status} ${tail(await created.text())}`,
+      );
+    const upload = (await created.json()) as unknown as Record<string, unknown>;
+    const uploadID = String(upload.id || "");
+    if (!uploadID) throw new Error("MinerU 上传初始化没有返回 id");
+
+    const uploaded = await fetchWithTimeout(
+      String(
+        upload.upload_url ||
+          `${endpoint}/v1/uploads/${encodeURIComponent(uploadID)}/content`,
+      ),
+      {
+        method: String(upload.upload_method || "PUT").toUpperCase(),
+        headers: {
+          "content-type": "application/pdf",
+          ...((upload.upload_headers as Record<string, string> | null) || {}),
+        },
+        body: bytes,
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if (!uploaded.ok)
+      throw new Error(
+        `MinerU 上传失败：HTTP ${uploaded.status} ${tail(await uploaded.text())}`,
+      );
+
+    const completed = await fetchWithTimeout(
+      `${endpoint}/v1/uploads/${encodeURIComponent(uploadID)}/complete`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if (!completed.ok)
+      throw new Error(
+        `MinerU 上传确认失败：HTTP ${completed.status} ${tail(await completed.text())}`,
+      );
+    const completedUpload = (await completed.json()) as unknown as Record<
+      string,
+      unknown
+    >;
+    const file = (completedUpload.file as Record<string, unknown> | null) || {};
+    const fileID = String(file.id || "");
+    if (!fileID) throw new Error("MinerU 上传完成但没有返回 file_id");
+
+    const submitted = await fetchWithTimeout(
+      `${endpoint}/v1/parse/jobs`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          files: [{ source: { type: "file_id", file_id: fileID } }],
+          tier: this.profile.tier,
+          ocr_mode: this.profile.method,
+          output_formats: ["markdown", "zip"],
+        }),
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if (!submitted.ok)
+      throw new Error(
+        `MinerU 解析任务创建失败：HTTP ${submitted.status} ${tail(await submitted.text())}`,
+      );
+    const job = (await submitted.json()) as unknown as Record<string, unknown>;
+    const jobID = String(job.job_id || "");
+    if (!jobID) throw new Error("MinerU 解析任务没有返回 job_id");
+
+    while (Date.now() < deadline) {
+      await delay(1500);
+      const response = await fetchWithTimeout(
+        `${endpoint}/v1/parse/jobs/${encodeURIComponent(jobID)}`,
+        {},
+        remainingTimeout(deadline),
+        this.controller?.signal,
+      );
+      if (!response.ok)
+        throw new Error(`MinerU 解析任务查询失败：HTTP ${response.status}`);
+      const status = (await response.json()) as unknown as Record<
+        string,
+        unknown
+      >;
+      const state = String(status.status || "").toLocaleLowerCase();
+      if (["failed", "canceled"].includes(state))
+        throw new Error(
+          `MinerU 解析失败：${mineruJobError(status) || "未知错误"}`,
+        );
+      if (!["completed", "partial"].includes(state)) continue;
+
+      const archiveID = mineruJobOutputFileID(status, "zip");
+      if (archiveID) {
+        const archive = await fetchWithTimeout(
+          `${endpoint}/v1/files/${encodeURIComponent(archiveID)}/content`,
+          {},
+          remainingTimeout(deadline),
+          this.controller?.signal,
+        );
+        if (!archive.ok)
+          throw new Error(`MinerU 结果下载失败：HTTP ${archive.status}`);
+        return this.selfHostedResponse(archive, pdfPath);
+      }
+      const markdownID = mineruJobOutputFileID(status, "markdown");
+      if (markdownID) {
+        const markdownResponse = await fetchWithTimeout(
+          `${endpoint}/v1/files/${encodeURIComponent(markdownID)}/content`,
+          {},
+          remainingTimeout(deadline),
+          this.controller?.signal,
+        );
+        if (!markdownResponse.ok)
+          throw new Error(
+            `MinerU Markdown 下载失败：HTTP ${markdownResponse.status}`,
+          );
+        const markdown = new TextDecoder().decode(
+          new Uint8Array(await markdownResponse.arrayBuffer()),
+        );
+        if (markdown.trim()) return { markdown, figures: [] };
+      }
+      throw new Error("MinerU 解析任务完成但没有可下载的结果");
+    }
+    throw new Error("MinerU 解析任务超时");
+  }
+
   private async convertWithSelfHosted(
     pdfPath: string,
   ): Promise<MinerUConversionResult> {
@@ -880,6 +1058,13 @@ export class MinerUConversionService {
     try {
       const bytes = await IOUtils.read(pdfPath);
       const fileName = PathUtils.filename(pdfPath);
+      const v1Result = await this.convertWithV1Api(
+        bytes,
+        fileName,
+        pdfPath,
+        deadline,
+      );
+      if (v1Result) return v1Result;
       const directMultipart = this.selfHostedMultipart(bytes, fileName);
       const direct = await fetchWithTimeout(
         `${this.profile.selfHostedEndpoint}/file_parse`,
@@ -1152,7 +1337,7 @@ export async function findLlmForZoteroMineruCache(
 
 /**
  * Read a cached llm-for-zotero MinerU result from its per-attachment cache
- * directory. Reuses the same content_list.json parsing as the other MinerU
+ * directory. Reuses the same manifest parsing (3.x content_list / 4.x structured)
  * backends so figure captions, page indices and bounding boxes are preserved.
  */
 export async function mineruResultFromLlmForZoteroCache(
@@ -1388,16 +1573,25 @@ function relativeLocalPath(root: string, path: string): string {
 }
 
 function isContentListName(path: string): boolean {
-  return /(?:^|[\\/])(?:[^\\/]+_)?content_list(?:_v\d+)?\.json$/i.test(path);
+  // 3.x emits *_content_list.json; 4.x replaced it with structured_content.json.
+  return (
+    /(?:^|[\\/])(?:[^\\/]+_)?content_list(?:_v\d+)?\.json$/i.test(path) ||
+    /(?:^|[\\/])structured_content\.json$/i.test(path) ||
+    /(?:^|[\\/])(?:(?:[^\\/]+_)?middle|middle_json)\.json$/i.test(path)
+  );
 }
 
 async function endpointHealthy(endpoint: string): Promise<boolean> {
-  try {
-    const response = await fetchWithTimeout(`${endpoint}/health`, {}, 5_000);
-    return response.ok;
-  } catch {
-    return false;
+  // MinerU 4.x moved health checks to /v1/health; keep /health for 3.x servers.
+  for (const path of ["/v1/health", "/health"]) {
+    try {
+      const response = await fetchWithTimeout(`${endpoint}${path}`, {}, 5_000);
+      if (response.ok) return true;
+    } catch {
+      // Try the next candidate path.
+    }
   }
+  return false;
 }
 
 function isLoopbackEndpoint(value: string): boolean {
@@ -1730,12 +1924,117 @@ function resolveArchiveImageName(
   });
 }
 
+function mineruJobOutputFileID(
+  job: Record<string, unknown>,
+  format: string,
+): string {
+  const files = Array.isArray(job.files) ? job.files : [];
+  for (const entry of files) {
+    const outputs = (entry as Record<string, unknown>)?.output_files as
+      | Record<string, unknown>
+      | undefined;
+    const target = outputs?.[format] as Record<string, unknown> | undefined;
+    const fileID = String(target?.file_id || "");
+    if (fileID) return fileID;
+  }
+  return "";
+}
+
+function mineruJobError(job: Record<string, unknown>): string {
+  const files = Array.isArray(job.files) ? job.files : [];
+  for (const entry of files) {
+    const error = (entry as Record<string, unknown>)?.error as
+      | Record<string, unknown>
+      | undefined;
+    const message = String(error?.message || error?.code || "");
+    if (message) return message;
+  }
+  return "";
+}
+
 function mineruContentRows(content: unknown): unknown[] {
-  return Array.isArray(content)
-    ? content
-    : Array.isArray((content as Record<string, unknown>)?.content_list)
-      ? ((content as Record<string, unknown>).content_list as unknown[])
+  if (Array.isArray(content)) return content;
+  const record = content as Record<string, unknown> | undefined;
+  if (Array.isArray(record?.content_list))
+    return record.content_list as unknown[];
+  // MinerU 4.x structured_content.json: { pages: [{ page_idx, blocks: [...] }] }
+  if (Array.isArray(record?.pages))
+    return mineruStructuredRows(record.pages as unknown[]);
+  return [];
+}
+
+function mineruStructuredRows(pages: unknown[]): unknown[] {
+  const rows: unknown[] = [];
+  for (const [fallbackIndex, page] of pages.entries()) {
+    const pageRecord = page as Record<string, unknown>;
+    const pageIndex = Number(pageRecord?.page_idx ?? fallbackIndex) || 0;
+    const blocks = Array.isArray(pageRecord?.blocks)
+      ? (pageRecord.blocks as unknown[])
       : [];
+    for (const block of blocks) {
+      const row = mineruStructuredRow(
+        block as Record<string, unknown>,
+        pageIndex,
+      );
+      if (row) rows.push(row);
+    }
+  }
+  return rows;
+}
+
+function mineruStructuredRow(
+  block: Record<string, unknown>,
+  pageIndex: number,
+): Record<string, unknown> | undefined {
+  const blockType = String(block?.type || "").toLocaleLowerCase();
+  if (!["image", "table", "chart"].includes(blockType)) return undefined;
+  const nested = Array.isArray(block?.content)
+    ? (block.content as Record<string, unknown>[])
+    : [];
+  // middle_json.json nests a <type>_body block carrying `image_path`;
+  // structured_content.json stores the archive path in `image_source`.
+  const payload =
+    nested.find((entry) => entry?.image_path) ||
+    ({
+      image_path: block?.image_source || block?.image_path,
+    } as Record<string, unknown>);
+  const imagePath = String(payload?.image_path || "");
+  if (!imagePath) return undefined;
+  const captionKey =
+    blockType === "table"
+      ? "table_caption"
+      : blockType === "chart"
+        ? "chart_caption"
+        : "image_caption";
+  const captions = nested
+    .filter((entry) =>
+      String(entry?.type || "")
+        .toLocaleLowerCase()
+        .startsWith(`${blockType}_caption`),
+    )
+    .flatMap((entry) =>
+      Array.isArray(entry?.content)
+        ? (entry.content as Record<string, unknown>[]).map((item) =>
+            String(item?.content || ""),
+          )
+        : [String(entry?.content || "")],
+    )
+    .filter(Boolean);
+  // structured_content.json keeps captions in a dedicated array instead.
+  const inlineCaptions = captions.length
+    ? captions
+    : Array.isArray(block?.captions)
+      ? (block.captions as Record<string, unknown>[])
+          .map((entry) => String(entry?.content || ""))
+          .filter(Boolean)
+      : [];
+  return {
+    type: blockType,
+    page_idx: pageIndex,
+    bbox: block.bbox,
+    img_path: imagePath,
+    [captionKey]: inlineCaptions,
+  };
 }
 
 function mineruFigureDescriptor(
@@ -1957,8 +2256,17 @@ function isPrivateEndpoint(value: string): boolean {
   }
 }
 
+/** PathUtils.filename throws NS_ERROR_FILE_UNRECOGNIZED_PATH for bare names. */
+function safeFilename(path: string): string {
+  try {
+    return PathUtils.filename(path);
+  } catch {
+    return String(path).split(/[\\/]/).filter(Boolean).at(-1) || "";
+  }
+}
+
 function safeBaseName(path: string): string {
-  const base = PathUtils.filename(path)
+  const base = safeFilename(path)
     .replace(/\.pdf$/i, "")
     .replace(/[<>:"/\\|?*]/g, "_");
   return [...base]

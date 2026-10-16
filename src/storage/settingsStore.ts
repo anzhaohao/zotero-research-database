@@ -50,6 +50,7 @@ export const PORTABLE_SETTING_KEYS = [
   "mineruDockerExecutable",
   "mineruDockerDesktopExecutable",
   "mineruBackend",
+  "mineruTier",
   "mineruMethod",
   "mineruModelVersion",
   "mineruLanguage",

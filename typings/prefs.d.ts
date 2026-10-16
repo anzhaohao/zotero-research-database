@@ -48,6 +48,7 @@ declare namespace _ZoteroTypes {
       "mineruDockerExecutable": string;
       "mineruDockerDesktopExecutable": string;
       "mineruBackend": string;
+      "mineruTier": string;
       "mineruMethod": string;
       "mineruModelVersion": string;
       "mineruLanguage": string;

@@ -406,8 +406,9 @@
         与图表。</html:p
       >
       <html:p class="zrdb-pref-mode-note" data-mineru-modes="self-hosted"
-        >推荐：转换完成后自动导入 Markdown，并把 content_list.json
-        中的图、表和图片放入“论文图表”列。</html:p
+        >推荐：转换完成后自动导入 Markdown，并把解析清单中的图、表和图片放入
+        “论文图表”列（MinerU 4.x 读 structured_content.json，3.x 读
+        content_list.json）。</html:p
       >
       <html:label data-mineru-modes="local-client"
         >客户端可执行文件
@@ -468,7 +469,20 @@
           placeholder="E:\software\docker\Docker Desktop.exe"
       /></html:label>
       <html:label data-mineru-modes="self-hosted"
-        >本地后端 <html:input type="text" data-pref="mineruBackend"
+        >解析质量档
+        <html:select data-pref="mineruTier"
+          ><html:option value="flash">flash（无模型，最快）</html:option
+          ><html:option value="basic">basic（小模型）</html:option
+          ><html:option value="standard">standard（默认）</html:option
+          ><html:option value="advanced"
+            >advanced（最高质量）</html:option
+          ></html:select
+        ></html:label
+      >
+      <html:label data-mineru-modes="local-client self-hosted"
+        >本地后端（MinerU 3.x 服务与 Desktop 客户端使用）<html:input
+          type="text"
+          data-pref="mineruBackend"
       /></html:label>
       <html:label data-mineru-modes="official-api self-hosted"
         >解析方式

@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import JSZip from "jszip";
 import {
   buildSelfHostedMultipartBody,
   buildMinerUDockerComposeArguments,
@@ -145,6 +146,57 @@ function replaceGlobal(name: string, value: unknown): () => void {
     if (hadOwnValue) target[name] = previous;
     else delete target[name];
   };
+}
+
+/** Mirrors the real PathUtils.filename, which rejects bare names. */
+function stubPathUtils(): () => void {
+  return replaceGlobal("PathUtils", {
+    filename: (path: string) => {
+      const value = String(path);
+      if (!/[\\/]/.test(value))
+        throw new Error("NS_ERROR_FILE_UNRECOGNIZED_PATH");
+      return value.split(/[\\/]/).at(-1) || value;
+    },
+  });
+}
+
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Build a MinerU 4.x style result archive with one image figure. */
+async function buildV1Archive(): Promise<Uint8Array> {
+  const zip = new JSZip();
+  zip.file(
+    "markdown.md",
+    "![fig](images/page_0_image_body_2.jpg)\n\nBody text.\n",
+  );
+  zip.file(
+    "structured_content.json",
+    JSON.stringify({
+      pages: [
+        {
+          page_idx: 3,
+          blocks: [
+            { type: "text", bbox: [0.1, 0.1, 0.9, 0.2], content: "Body text." },
+            {
+              type: "image",
+              bbox: [0.1, 0.2, 0.5, 0.6],
+              captions: [
+                { bbox: [0, 0, 0.1, 0.1], content: "Figure 2. Demo." },
+              ],
+              image_source: "images/page_0_image_body_2.jpg",
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  zip.file("images/page_0_image_body_2.jpg", Uint8Array.from([255, 216, 255]));
+  return zip.generateAsync({ type: "uint8array" });
 }
 
 describe("MinerU integration", function () {
@@ -299,10 +351,11 @@ describe("MinerU integration", function () {
     let request: RequestInit | undefined;
     const restore = [
       replaceGlobal("IOUtils", { read: async () => fileBytes }),
-      replaceGlobal("PathUtils", {
-        filename: (path: string) => path.split(/[\\/]/).at(-1) || path,
-      }),
-      replaceGlobal("fetch", async (_url: unknown, init: RequestInit) => {
+      stubPathUtils(),
+      replaceGlobal("fetch", async (url: unknown, init: RequestInit) => {
+        // Simulate a MinerU 3.x server so the legacy multipart path is exercised.
+        if (String(url).includes("/v1/"))
+          return new Response("not found", { status: 404 });
         request = init;
         return response;
       }),
@@ -345,10 +398,11 @@ describe("MinerU integration", function () {
       const requests: Array<{ url: string; init: RequestInit }> = [];
       const restore = [
         replaceGlobal("IOUtils", { read: async () => fileBytes }),
-        replaceGlobal("PathUtils", {
-          filename: (path: string) => path.split(/[\\/]/).at(-1) || path,
-        }),
+        stubPathUtils(),
         replaceGlobal("fetch", async (url: unknown, init: RequestInit) => {
+          // A 3.x server rejects the v1 prefix, so the legacy path is used.
+          if (String(url).includes("/v1/"))
+            return new Response("not found", { status: 404 });
           requests.push({ url: String(url), init });
           if (requests.length === 1)
             return new Response("unsupported", { status: fallbackStatus });
@@ -398,15 +452,15 @@ describe("MinerU integration", function () {
     const restoreIO = replaceGlobal("IOUtils", {
       read: async () => fileBytes,
     });
-    const restorePath = replaceGlobal("PathUtils", {
-      filename: (path: string) => path.split(/[\\/]/).at(-1) || path,
-    });
+    const restorePath = stubPathUtils();
     try {
       for (const status of [400, 401, 403, 409, 422, 429, 500, 503]) {
         const requests: string[] = [];
         const restoreFetch = replaceGlobal(
           "fetch",
           async (url: unknown, _init: RequestInit) => {
+            if (String(url).includes("/v1/"))
+              return new Response("not found", { status: 404 });
             requests.push(String(url));
             return new Response(`explicit failure ${status}`, { status });
           },
@@ -433,6 +487,91 @@ describe("MinerU integration", function () {
     } finally {
       restorePath();
       restoreIO();
+    }
+  });
+
+  it("runs the MinerU 4.x upload and job flow and maps structured content", async function () {
+    // The job poll loop waits between attempts, so the default timeout is too tight.
+    this.timeout(10_000);
+    const fileBytes = Uint8Array.from([37, 80, 68, 70, 1, 2, 3]);
+    const archive = await buildV1Archive();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    let jobPolls = 0;
+    const restore = [
+      replaceGlobal("IOUtils", { read: async () => fileBytes }),
+      stubPathUtils(),
+      replaceGlobal("fetch", async (url: unknown, init: RequestInit) => {
+        const target = String(url);
+        requests.push({ url: target, init });
+        if (target.endsWith("/v1/uploads"))
+          return jsonResponse({ id: "upload-1", status: "pending" });
+        if (target.endsWith("/v1/uploads/upload-1/content"))
+          return new Response("", { status: 200 });
+        if (target.endsWith("/v1/uploads/upload-1/complete"))
+          return jsonResponse({ id: "upload-1", file: { id: "file-1" } });
+        if (target.endsWith("/v1/parse/jobs"))
+          return jsonResponse({ job_id: "job-1", status: "queued" });
+        if (target.endsWith("/v1/parse/jobs/job-1")) {
+          jobPolls += 1;
+          return jsonResponse(
+            jobPolls === 1
+              ? { job_id: "job-1", status: "running", files: [] }
+              : {
+                  job_id: "job-1",
+                  status: "completed",
+                  files: [{ output_files: { zip: { file_id: "zip-1" } } }],
+                },
+          );
+        }
+        if (target.endsWith("/v1/files/zip-1/content"))
+          return new Response(archive, {
+            status: 200,
+            headers: { "content-type": "application/zip" },
+          });
+        throw new Error(`unexpected request ${target}`);
+      }),
+    ];
+    try {
+      const result = await convertWithSelfHosted(
+        new MinerUConversionService(selfHostedProfile()),
+        "C:\\papers\\v1.pdf",
+      );
+      expect(result.markdown).to.contain("images/page_0_image_body_2.jpg");
+      expect(result.figures).to.have.length(1);
+      const figure = result.figures[0] as {
+        id: string;
+        kind: string;
+        caption: string;
+        pageIndex: number;
+        imageName: string;
+        bytes: Uint8Array;
+      };
+      expect(figure.id).to.equal(
+        "mineru:figure:images%2Fpage_0_image_body_2.jpg",
+      );
+      expect(figure.kind).to.equal("figure");
+      expect(figure.caption).to.equal("Figure 2. Demo.");
+      expect(figure.pageIndex).to.equal(3);
+      expect(figure.imageName).to.equal("images/page_0_image_body_2.jpg");
+      expect([...figure.bytes]).to.deep.equal([255, 216, 255]);
+
+      const upload = requests.find((entry) =>
+        entry.url.endsWith("/v1/uploads/upload-1/content"),
+      );
+      expect([...(upload?.init.body as Uint8Array)]).to.deep.equal([
+        ...fileBytes,
+      ]);
+      const job = requests.find((entry) =>
+        entry.url.endsWith("/v1/parse/jobs"),
+      );
+      const jobBody = JSON.parse(String(job?.init.body)) as Record<
+        string,
+        unknown
+      >;
+      expect(jobBody.tier).to.equal("standard");
+      expect(jobBody.output_formats).to.deep.equal(["markdown", "zip"]);
+    } finally {
+      restore.reverse().forEach((restoreGlobal) => restoreGlobal());
     }
   });
 
@@ -545,9 +684,7 @@ describe("MinerU integration", function () {
     const restoreIO = replaceGlobal("IOUtils", {
       read: async () => Uint8Array.from([37, 80, 68, 70]),
     });
-    const restorePath = replaceGlobal("PathUtils", {
-      filename: (path: string) => path.split(/[\\/]/).at(-1) || path,
-    });
+    const restorePath = stubPathUtils();
     let aborted = false;
     const restoreFetch = replaceGlobal(
       "fetch",

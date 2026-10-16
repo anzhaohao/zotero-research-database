@@ -69,6 +69,7 @@ export const EXPORTED_PREF_KEYS = [
   "mineruDockerExecutable",
   "mineruDockerDesktopExecutable",
   "mineruBackend",
+  "mineruTier",
   "mineruMethod",
   "mineruModelVersion",
   "mineruLanguage",
