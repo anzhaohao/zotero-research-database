@@ -168,7 +168,7 @@ export interface ResearchDataStore {
   ): Promise<void>;
 }
 
-export type ResearchDataChangeScope = "all" | "translated-title";
+export type ResearchDataChangeScope = "all" | "record" | "translated-title";
 
 export interface ResearchDataWriteOptions {
   changeScope?: ResearchDataChangeScope;

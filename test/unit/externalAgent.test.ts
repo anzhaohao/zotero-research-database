@@ -5,11 +5,15 @@ import {
   buildExtractionPrompt,
   buildCodexWorkerArguments,
   CODEX_WORKER_FLAGS,
+  ConfiguredAgentBridge,
   extractCodexFailureDetail,
   fetchWithTimeout,
   isCodexModelError,
   isCodexStartupNoise,
+  listOpenAICompatibleModels,
   listOllamaModels,
+  openAICompatibleEndpoint,
+  requestOpenAICompatibleJSON,
   resolveCompatibleWebSocketConstructor,
   validateExtractedValues,
 } from "../../src/services/externalAgent";
@@ -121,6 +125,142 @@ describe("external Codex bridge", function () {
     }
     expect(String(failure)).to.include("本机 localhost/127.0.0.1");
     expect(called).to.equal(false);
+  });
+
+  it("lists models from an OpenAI-compatible Base URL with authentication", async function () {
+    let requestURL = "";
+    let requestInit: RequestInit | undefined;
+    const models = await listOpenAICompatibleModels(
+      "https://example.com/compatible/v1///",
+      "secret-key",
+      1_000,
+      {
+        fetch: async (input, init) => {
+          requestURL = String(input);
+          requestInit = init;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              data: [{ id: "model-b" }, { id: "model-a" }, { id: "model-b" }],
+            }),
+          } as Response;
+        },
+      },
+    );
+    expect(requestURL).to.equal("https://example.com/compatible/v1/models");
+    expect(new Headers(requestInit?.headers).get("authorization")).to.equal(
+      "Bearer secret-key",
+    );
+    expect(models).to.deep.equal(["model-a", "model-b"]);
+  });
+
+  it("requests and parses structured JSON through Chat Completions", async function () {
+    let requestURL = "";
+    let body: any;
+    const value = await requestOpenAICompatibleJSON(
+      {
+        endpoint: "https://example.com/v1/",
+        apiKey: "secret-key",
+        model: "provider/model",
+        timeoutMs: 1_000,
+      },
+      {
+        prompt: "return a test result",
+        schema: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
+      },
+      {
+        fetch: async (input, init) => {
+          requestURL = String(input);
+          body = JSON.parse(String(init?.body));
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [{ message: { content: '```json\n{"ok":true}\n```' } }],
+            }),
+          } as Response;
+        },
+      },
+    );
+    expect(requestURL).to.equal("https://example.com/v1/chat/completions");
+    expect(body.model).to.equal("provider/model");
+    expect(body.response_format).to.deep.equal({ type: "json_object" });
+    expect(body.messages[1].content).to.include('"required":["ok"]');
+    expect(value).to.deep.equal({ ok: true });
+  });
+
+  it("uses the OpenAI-compatible bridge for checks and field extraction", async function () {
+    const fields = createDefaultFields()
+      .filter((field) => field.extraction.enabled)
+      .slice(0, 1);
+    const responses = [{ ok: true }, { [fields[0].id]: "重新生成的研究问题" }];
+    const bridge = new ConfiguredAgentBridge(
+      {
+        kind: "openai-compatible",
+        endpoint: "https://example.com/v1",
+        apiKey: "secret-key",
+        model: "provider/model",
+        timeoutMs: 1_000,
+      },
+      {
+        fetch: async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify(responses.shift()),
+                  },
+                },
+              ],
+            }),
+          }) as Response,
+      },
+    );
+    await bridge.testStructuredOutput();
+    const result = await bridge.extractFields(fields, "论文正文");
+    expect(result.value).to.deep.equal({
+      [fields[0].id]: "重新生成的研究问题",
+    });
+    expect(result.executorVersion).to.include("provider/model");
+    expect(responses).to.have.length(0);
+  });
+
+  it("validates API Base URLs and redacts keys from gateway errors", async function () {
+    expect(() =>
+      openAICompatibleEndpoint("https://example.com/v1?key=secret", "/models"),
+    ).to.throw("不含查询参数");
+    let failure: unknown;
+    try {
+      await listOpenAICompatibleModels(
+        "https://example.com/v1",
+        "secret-key",
+        1_000,
+        {
+          fetch: async () =>
+            ({
+              ok: false,
+              status: 401,
+              text: async () =>
+                JSON.stringify({
+                  error: { message: "invalid secret-key" },
+                }),
+            }) as Response,
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).to.include("HTTP 401");
+    expect(String(failure)).to.not.include("secret-key");
+    expect(String(failure)).to.include("[已隐藏]");
   });
 
   it("builds a closed JSON Schema for the requested fields", function () {

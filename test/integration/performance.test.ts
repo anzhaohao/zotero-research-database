@@ -13,7 +13,9 @@ import {
 } from "../../src/services/pdfThumbnail";
 import { TableFlatRowsCache } from "../../src/ui/features/table/tableRows";
 import { useResearchData } from "../../src/ui/features/table/useResearchData";
-import { setPref } from "../../src/utils/prefs";
+import { ResearchLocalStore } from "../../src/storage/localData";
+import { createItemInternalState } from "../../src/storage/syncedData";
+import { getPref, setPref } from "../../src/utils/prefs";
 
 type SyntheticItem = Zotero.Item & {
   key: string;
@@ -286,6 +288,64 @@ describe("host performance and bounded caches", function () {
       assert.isFalse(
         latest.records.has(items[0].key),
         "old collection result was published",
+      );
+    } finally {
+      mounted.root.unmount();
+      mounted.container.remove();
+      setPref("zoteroFigureEnabled", oldFigureEnabled as boolean);
+      setPref("mineruFigureFallback", oldMineruFallback as boolean);
+    }
+  });
+
+  it("reloads figures for artifact writes but not record-only writes", async function () {
+    const items = [syntheticItem("S0000001")];
+    const state = workspace();
+    let recordLoads = 0;
+    let figureLoads = 0;
+    const repository = {
+      async loadRecord(item: SyntheticItem) {
+        recordLoads += 1;
+        return {
+          ...createEmptyRecord(item.libraryID, item.key),
+          revision: recordLoads,
+        };
+      },
+      async loadFigures() {
+        figureLoads += 1;
+        return [];
+      },
+    };
+    const oldFigureEnabled = getPref("zoteroFigureEnabled");
+    const oldMineruFallback = getPref("mineruFigureFallback");
+    setPref("zoteroFigureEnabled", false);
+    setPref("mineruFigureFallback", true);
+    const snapshots: HookSnapshot[] = [];
+    const mounted = mountHook(items, repository, state, (snapshot) =>
+      snapshots.push(snapshot),
+    );
+    try {
+      await eventually(
+        () => recordLoads === 1 && figureLoads === 1,
+        "initial record and figure loads did not finish",
+      );
+      const initialSnapshotCount = snapshots.length;
+      const store = new ResearchLocalStore();
+      await store.ready();
+      const itemState = {
+        ...createItemInternalState(items[0].libraryID, items[0].key),
+        record: createEmptyRecord(items[0].libraryID, items[0].key),
+      };
+      await store.setItem(itemState, { changeScope: "record" });
+      await eventually(
+        () => recordLoads === 2 && snapshots.length > initialSnapshotCount,
+        "record-only write did not reload its record",
+      );
+      assert.equal(figureLoads, 1, "record-only write reloaded figures");
+
+      await store.setItem(itemState, { changeScope: "all" });
+      await eventually(
+        () => recordLoads === 3 && figureLoads === 2,
+        "artifact-scope write did not reload both record and figures",
       );
     } finally {
       mounted.root.unmount();

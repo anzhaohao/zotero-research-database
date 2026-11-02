@@ -6,6 +6,7 @@ import type {
 } from "../domain/types";
 import {
   createAgentBridge,
+  listOpenAICompatibleModels,
   listOllamaModels,
   type AgentProfile,
 } from "../services/externalAgent";
@@ -66,13 +67,13 @@ const prefKeys = [
   "agentExecutable",
   "agentArgs",
   "agentEndpoint",
+  "agentApiKey",
   "agentModel",
   "agentTimeoutMs",
   "mineruMode",
-  "mineruExecutable",
-  "mineruArgs",
-  "mineruDesktopOutputDirectory",
+  "mineruSharedStoreDirectory",
   "mineruOfficialEndpoint",
+  "mineruOfficialToken",
   "mineruOfficialTokenEnvironment",
   "mineruSelfHostedEndpoint",
   "mineruSelfHostedAutoStart",
@@ -444,7 +445,7 @@ export class PreferencesController {
     );
     agentKind?.addEventListener("change", () => {
       const kind = agentKind.value;
-      if (kind === "claude-code" || kind === "hana-agent") {
+      if (kind === "claude-code") {
         const preset = AGENT_PRESETS[kind];
         const executable = this.root?.querySelector<HTMLInputElement>(
           '[data-pref="agentExecutable"]',
@@ -454,6 +455,16 @@ export class PreferencesController {
         );
         if (executable) executable.value = preset.executable || "";
         if (endpoint) endpoint.value = preset.endpoint || "";
+      }
+      if (kind === "ollama" || kind === "openai-compatible") {
+        const endpoint = this.root?.querySelector<HTMLInputElement>(
+          '[data-pref="agentEndpoint"]',
+        );
+        if (endpoint)
+          endpoint.value =
+            kind === "openai-compatible"
+              ? "https://api.openai.com/v1"
+              : "http://127.0.0.1:11434";
       }
       this.updateModeVisibility();
       void this.refreshAgentModelOptions();
@@ -487,10 +498,16 @@ export class PreferencesController {
       ?.addEventListener("click", () => {
         void this.refreshAgentModelOptions();
       });
-    this.root
-      .querySelector('[data-pref="agentEndpoint"]')
-      ?.addEventListener("change", () => {
-        if (String(inputValue(this.root!, "agentKind")) === "ollama")
+    for (const selector of [
+      '[data-pref="agentEndpoint"]',
+      '[data-pref="agentApiKey"]',
+    ])
+      this.root.querySelector(selector)?.addEventListener("change", () => {
+        if (
+          ["ollama", "openai-compatible"].includes(
+            String(inputValue(this.root!, "agentKind")),
+          )
+        )
           void this.refreshAgentModelOptions();
       });
     void this.refreshAgentModelOptions();
@@ -512,6 +529,7 @@ export class PreferencesController {
     const presets = [...getAgentModelPresets(kind)];
     let options = presets;
     let codexHint = "";
+    let modelLoadHint = "";
     if (kind === "codex-cli") {
       const catalog = await readLocalCodexModelCatalog().catch(() => ({
         models: [],
@@ -547,21 +565,27 @@ export class PreferencesController {
         codexHint = "该模型不在本机 Codex 可用列表中，运行可能失败。";
       }
     }
-    if (kind === "ollama") {
+    if (kind === "ollama" || kind === "openai-compatible") {
       try {
         const endpoint = String(inputValue(this.root, "agentEndpoint") || "");
         const timeout = Number(inputValue(this.root, "agentTimeoutMs"));
-        const models = await listOllamaModels(
-          endpoint || undefined,
+        const requestTimeout =
           Number.isFinite(timeout) && timeout >= 1000
             ? Math.min(timeout, 30_000)
-            : 10_000,
-        );
+            : 10_000;
+        const models =
+          kind === "ollama"
+            ? await listOllamaModels(endpoint || undefined, requestTimeout)
+            : await listOpenAICompatibleModels(
+                endpoint || undefined,
+                String(inputValue(this.root, "agentApiKey") || ""),
+                requestTimeout,
+              );
         for (const model of models)
           if (!options.some((option) => option.value === model))
             options.push({ value: model, label: model });
-      } catch {
-        // Keep the editable input usable when Ollama is not running yet.
+      } catch (error) {
+        modelLoadHint = `模型列表读取失败：${error instanceof Error ? error.message : String(error)}；可选择“自定义模型”手动填写。`;
       }
     }
     if (requestId !== this.agentModelRequestId) return;
@@ -585,12 +609,18 @@ export class PreferencesController {
     );
     if (current && isKnown) select.value = current;
     else if (current) select.value = "__custom__";
+    else if (kind === "ollama" || kind === "openai-compatible")
+      select.value = "__custom__";
     else select.value = options[0]?.value || "";
     input.hidden = select.value !== "__custom__";
     const help = this.root.querySelector<HTMLElement>("#zrdb-agent-model-help");
     if (help)
       help.textContent =
         codexHint ||
+        modelLoadHint ||
+        (kind === "openai-compatible"
+          ? "点击“刷新模型列表”读取服务可用模型，也可以手动填写模型 ID。"
+          : "") ||
         (kind === "ollama"
           ? "可从本机 Ollama 读取模型；未启动服务时也可以手动填写。"
           : "从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。");
@@ -615,11 +645,18 @@ export class PreferencesController {
     const endpointLabel = this.root.querySelector<HTMLElement>(
       '[data-agent-endpoint-label="true"]',
     );
+    const endpointInput = this.root.querySelector<HTMLInputElement>(
+      '[data-pref="agentEndpoint"]',
+    );
+    const openAICompatible = agentKind === "openai-compatible";
     if (endpointLabel)
-      endpointLabel.textContent =
-        agentKind === "hana-agent"
-          ? "服务信息文件（可留空自动检测）"
-          : "本机服务地址";
+      endpointLabel.textContent = openAICompatible
+        ? "API 地址（Base URL）"
+        : "本机服务地址";
+    if (endpointInput)
+      endpointInput.placeholder = openAICompatible
+        ? "https://api.openai.com/v1"
+        : "http://127.0.0.1:11434";
     const currentName = this.root.querySelector<HTMLElement>(
       "#zrdb-agent-current-name",
     );
@@ -702,6 +739,7 @@ export class PreferencesController {
       executable: inputValue(this.root, "agentExecutable"),
       args: inputValue(this.root, "agentArgs"),
       endpoint: inputValue(this.root, "agentEndpoint"),
+      apiKey: inputValue(this.root, "agentApiKey"),
       model: inputValue(this.root, "agentModel"),
       timeoutMs: inputValue(this.root, "agentTimeoutMs"),
     });
@@ -711,13 +749,9 @@ export class PreferencesController {
     if (!this.root) throw new Error("设置页面尚未加载");
     return parseMinerUProfile({
       mode: inputValue(this.root, "mineruMode"),
-      executable: inputValue(this.root, "mineruExecutable"),
-      args: inputValue(this.root, "mineruArgs"),
-      desktopOutputDirectory: inputValue(
-        this.root,
-        "mineruDesktopOutputDirectory",
-      ),
+      sharedStoreDirectory: inputValue(this.root, "mineruSharedStoreDirectory"),
       officialEndpoint: inputValue(this.root, "mineruOfficialEndpoint"),
+      officialToken: inputValue(this.root, "mineruOfficialToken"),
       officialTokenEnvironment: inputValue(
         this.root,
         "mineruOfficialTokenEnvironment",

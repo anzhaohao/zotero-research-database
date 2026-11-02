@@ -1,8 +1,8 @@
+import { useState } from "react";
 import type { MinerUProgress } from "../../../services/mineru";
 
 export function MinerUConfigurationPanel({
   modeLabel,
-  desktopMode,
   items,
   mineruRunning,
   mineruImporting,
@@ -12,15 +12,15 @@ export function MinerUConfigurationPanel({
   onOpenSettings,
 }: {
   modeLabel: string;
-  desktopMode: boolean;
   items: Zotero.Item[];
   mineruRunning: boolean;
   mineruImporting: boolean;
-  runMinerU: (items: Zotero.Item[]) => Promise<void>;
+  runMinerU: (items: Zotero.Item[], forceRefresh?: boolean) => Promise<void>;
   mineruProgress: Map<string, MinerUProgress>;
   onCancel: () => void;
   onOpenSettings: () => void;
 }) {
+  const [forceRefresh, setForceRefresh] = useState(false);
   return (
     <section className="zrdb-tool-section">
       <header>
@@ -35,22 +35,26 @@ export function MinerUConfigurationPanel({
         </button>
       </header>
       <p className="zrdb-dialog-hint">
-        每次转换使用插件设置中已保存的配置，结果自动导入对应文献。
+        默认复用已有 Markdown
+        与共享产物，不重复解析。每次转换使用插件设置中已保存的配置。
       </p>
-      {desktopMode && (
-        <p className="zrdb-tool-capability" data-tone="notice">
-          主 PDF 投递到 Desktop 后，请在客户端点击“立即解析”。完成后，Markdown
-          与论文图表会自动回传到对应 Zotero 条目。
-        </p>
-      )}
+      <label className="zrdb-field-checks">
+        <input
+          type="checkbox"
+          checked={forceRefresh}
+          disabled={mineruRunning}
+          onChange={(event) => setForceRefresh(event.target.checked)}
+        />
+        重新解析并生成新产物（替换当前共享版本，旧附件保留为历史）
+      </label>
       <div className="zrdb-inline-actions">
         <button
           type="button"
           className="primary"
           disabled={!items.length || mineruRunning}
-          onClick={() => void runMinerU(items)}
+          onClick={() => void runMinerU(items, forceRefresh)}
         >
-          转换选中 {items.length} 篇
+          {forceRefresh ? "重新解析" : "转换"}选中 {items.length} 篇
         </button>
         {mineruRunning && (
           <button type="button" onClick={onCancel} disabled={mineruImporting}>

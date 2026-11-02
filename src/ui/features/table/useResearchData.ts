@@ -307,7 +307,7 @@ export function useResearchData(context: Context) {
           return;
         requestRefresh(false, false, {
           records: [change.itemKey],
-          figures: change.scope === "translated-title" ? [] : [change.itemKey],
+          figures: change.scope === "all" ? [change.itemKey] : [],
         });
       } else {
         // A workspace or complete backup replacement can also change fields/views.

@@ -115,4 +115,45 @@ describe("legacy Extra migration safety", function () {
       (globalThis as any).Zotero = previous;
     }
   });
+
+  it("marks manual and agent record saves as record-only changes", async function () {
+    const previous = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = { Libraries: { userLibraryID: 1 } };
+    let state = {
+      ...createItemInternalState(1, "ABCD1234"),
+      record: createEmptyRecord(1, "ABCD1234"),
+    };
+    const writeOptions: Array<ResearchDataWriteOptions | undefined> = [];
+    const item = {
+      key: "ABCD1234",
+      libraryID: 1,
+      isRegularItem: () => true,
+      getField: () => "",
+    } as unknown as Zotero.Item;
+    const store: ResearchDataStore = {
+      getWorkspace: () => undefined,
+      setWorkspace: async () => undefined,
+      getItem: () => state,
+      setItem: async (next, options) => {
+        state = next;
+        writeOptions.push(options);
+      },
+    };
+    try {
+      const repository = new ResearchRepository(store);
+      await repository.saveRecord(
+        item,
+        setManualValue(state.record!, "research-significance", "手动编辑"),
+        [],
+      );
+      await repository.updateRecord(item, (current) =>
+        setManualValue(current, "research-significance", "Agent 重新生成"),
+      );
+      expect(writeOptions.map((options) => options?.changeScope)).to.deep.equal(
+        ["record", "record"],
+      );
+    } finally {
+      (globalThis as any).Zotero = previous;
+    }
+  });
 });

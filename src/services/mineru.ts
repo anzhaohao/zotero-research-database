@@ -1,14 +1,21 @@
 import JSZip, { type JSZipObject } from "jszip";
 import { importArtifacts } from "./artifactEndpoint";
-import { sha256Text } from "./contentSource";
+import { readExistingMinerUMarkdown, sha256Text } from "./contentSource";
 import { resolvePrimaryPdf } from "./primaryPdf";
-import { getPref, setPref } from "../utils/prefs";
+import { clearPref, getPref, setPref } from "../utils/prefs";
+import {
+  claimSharedMinerUWork,
+  writeSharedMinerUIndex,
+  writeSharedMinerUResult,
+  type SharedMinerUIdentity,
+} from "./mineruSharedStore";
 
 const SUBPROCESS_MODULE = "resource://gre/modules/Subprocess.sys.mjs";
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
-const MINERU_SETTINGS_VERSION = 3;
-const MINERU_DESKTOP_PATH = "E:\\software\\MinerU\\MinerU.exe";
+const MINERU_SETTINGS_VERSION = 5;
+const DEFAULT_MINERU_TOKEN_ENVIRONMENT = "MINERU_API_TOKEN";
 const MINERU_DOCKER_PROJECT_PATH = "E:\\software\\DockerProject\\MinerU";
+const MINERU_SHARED_STORE_PATH = "E:\\software\\Zotero\\mineru-shared-store";
 const DOCKER_EXECUTABLE_PATH =
   "E:\\software\\docker\\resources\\bin\\docker.exe";
 const DOCKER_DESKTOP_PATH = "E:\\software\\docker\\Docker Desktop.exe";
@@ -34,12 +41,7 @@ interface SubprocessAPI {
   pathSearch(command: string): Promise<string>;
 }
 
-interface DesktopDirectorySnapshot {
-  path: string;
-  lastModified: number;
-}
-
-export type MinerUMode = "local-client" | "official-api" | "self-hosted";
+export type MinerUMode = "official-api" | "self-hosted";
 
 export type MinerUTier = "flash" | "basic" | "standard" | "advanced";
 
@@ -57,10 +59,9 @@ export function mineruTier(value: unknown): MinerUTier {
 
 export interface MinerUProfile {
   mode: MinerUMode;
-  executable: string;
-  args: string[];
-  desktopOutputDirectory: string;
+  sharedStoreDirectory: string;
   officialEndpoint: string;
+  officialToken: string;
   officialTokenEnvironment: string;
   selfHostedEndpoint: string;
   selfHostedAutoStart: boolean;
@@ -96,14 +97,15 @@ export interface MinerUParsedFigure {
 export interface MinerUConversionResult {
   markdown: string;
   figures: MinerUParsedFigure[];
+  archive?: Uint8Array;
+  markdownArchivePath?: string;
 }
 
 export interface MinerUSettingsInput {
   mode: unknown;
-  executable: unknown;
-  args: unknown;
-  desktopOutputDirectory?: unknown;
+  sharedStoreDirectory?: unknown;
   officialEndpoint: unknown;
+  officialToken?: unknown;
   officialTokenEnvironment: unknown;
   selfHostedEndpoint: unknown;
   selfHostedAutoStart?: unknown;
@@ -121,33 +123,9 @@ export interface MinerUSettingsInput {
 }
 
 export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
-  const mode = ["local-client", "official-api", "self-hosted"].includes(
-    String(input.mode),
-  )
+  const mode = ["official-api", "self-hosted"].includes(String(input.mode))
     ? (String(input.mode) as MinerUMode)
-    : "local-client";
-  const rawArgs = String(input.args || "").trim();
-  let args: string[] = [];
-  if (rawArgs) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawArgs);
-    } catch (error) {
-      throw new Error(
-        'MinerU 参数必须是 JSON 字符串数组，例如 ["--lang","ch"]',
-        {
-          cause: error,
-        },
-      );
-    }
-    if (
-      !Array.isArray(parsed) ||
-      parsed.some((entry) => typeof entry !== "string")
-    ) {
-      throw new Error("MinerU 参数必须是 JSON 字符串数组");
-    }
-    args = parsed;
-  }
+    : "self-hosted";
   const method = ["auto", "txt", "ocr"].includes(String(input.method))
     ? (String(input.method) as MinerUProfile["method"])
     : "auto";
@@ -171,15 +149,15 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
   }
   return {
     mode,
-    executable:
-      String(input.executable || MINERU_DESKTOP_PATH).trim() ||
-      MINERU_DESKTOP_PATH,
-    args,
-    desktopOutputDirectory: String(input.desktopOutputDirectory || "").trim(),
+    sharedStoreDirectory:
+      String(input.sharedStoreDirectory || MINERU_SHARED_STORE_PATH).trim() ||
+      MINERU_SHARED_STORE_PATH,
     officialEndpoint,
+    officialToken: String(input.officialToken || "").trim(),
     officialTokenEnvironment:
-      String(input.officialTokenEnvironment || "MINERU_API_TOKEN").trim() ||
-      "MINERU_API_TOKEN",
+      String(
+        input.officialTokenEnvironment || DEFAULT_MINERU_TOKEN_ENVIRONMENT,
+      ).trim() || DEFAULT_MINERU_TOKEN_ENVIRONMENT,
     selfHostedEndpoint,
     selfHostedAutoStart:
       input.selfHostedAutoStart === undefined
@@ -212,10 +190,9 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
 export function readMinerUProfile(): MinerUProfile {
   return parseMinerUProfile({
     mode: getPref("mineruMode"),
-    executable: getPref("mineruExecutable"),
-    args: getPref("mineruArgs"),
-    desktopOutputDirectory: getPref("mineruDesktopOutputDirectory"),
+    sharedStoreDirectory: getPref("mineruSharedStoreDirectory"),
     officialEndpoint: getPref("mineruOfficialEndpoint"),
+    officialToken: getPref("mineruOfficialToken"),
     officialTokenEnvironment: getPref("mineruOfficialTokenEnvironment"),
     selfHostedEndpoint: getPref("mineruSelfHostedEndpoint"),
     selfHostedAutoStart: getPref("mineruSelfHostedAutoStart"),
@@ -235,10 +212,9 @@ export function readMinerUProfile(): MinerUProfile {
 
 export function saveMinerUProfile(profile: MinerUProfile): void {
   setPref("mineruMode", profile.mode);
-  setPref("mineruExecutable", profile.executable);
-  setPref("mineruArgs", JSON.stringify(profile.args));
-  setPref("mineruDesktopOutputDirectory", profile.desktopOutputDirectory);
+  setPref("mineruSharedStoreDirectory", profile.sharedStoreDirectory);
   setPref("mineruOfficialEndpoint", profile.officialEndpoint);
+  setPref("mineruOfficialToken", profile.officialToken);
   setPref("mineruOfficialTokenEnvironment", profile.officialTokenEnvironment);
   setPref("mineruSelfHostedEndpoint", profile.selfHostedEndpoint);
   setPref("mineruSelfHostedAutoStart", profile.selfHostedAutoStart);
@@ -262,10 +238,10 @@ export function saveMinerUProfile(profile: MinerUProfile): void {
 export function migrateMinerUPreferences(): void {
   const version = Number(getPref("mineruSettingsVersion") || 0);
   if (version >= MINERU_SETTINGS_VERSION) return;
-  if (String(getPref("mineruExecutable") || "") === "mineru")
-    setPref("mineruExecutable", MINERU_DESKTOP_PATH);
+  if (String(getPref("mineruMode") || "") === "local-client")
+    setPref("mineruMode", "self-hosted");
   if (
-    String(getPref("mineruMode") || "local-client") !== "official-api" &&
+    String(getPref("mineruMode") || "self-hosted") !== "official-api" &&
     String(getPref("mineruOfficialEndpoint") || "") ===
       "https://mineru.net/api/v4"
   )
@@ -280,6 +256,27 @@ export function migrateMinerUPreferences(): void {
   }
   if (!String(getPref("mineruTier") || "").trim())
     setPref("mineruTier", "standard");
+  if (!String(getPref("mineruSharedStoreDirectory") || "").trim())
+    setPref("mineruSharedStoreDirectory", MINERU_SHARED_STORE_PATH);
+  if (version < 5) {
+    const legacyEnvironment = String(
+      getPref("mineruOfficialTokenEnvironment") || "",
+    ).trim();
+    if (legacyEnvironment && !isEnvironmentVariableName(legacyEnvironment)) {
+      if (!String(getPref("mineruOfficialToken") || "").trim())
+        setPref("mineruOfficialToken", legacyEnvironment);
+      setPref(
+        "mineruOfficialTokenEnvironment",
+        DEFAULT_MINERU_TOKEN_ENVIRONMENT,
+      );
+    }
+  }
+  for (const key of [
+    "mineruExecutable",
+    "mineruArgs",
+    "mineruDesktopOutputDirectory",
+  ])
+    clearPref(key);
   setPref("mineruSettingsVersion", MINERU_SETTINGS_VERSION);
 }
 
@@ -315,9 +312,11 @@ export class MinerUConversionService {
   async run(
     items: Zotero.Item[],
     onProgress: (progress: MinerUProgress) => void,
+    options: { forceRefresh?: boolean } = {},
   ): Promise<void> {
     this.cancelled = false;
-    const reuseCache = getPref("mineruReuseLlmForZoteroCache") === true;
+    const reuseLlmCache =
+      !options.forceRefresh && getPref("mineruReuseLlmForZoteroCache") === true;
     for (const item of items) {
       if (this.cancelled) {
         onProgress({
@@ -338,163 +337,97 @@ export class MinerUConversionService {
         const pdfPath = await pdf.getFilePathAsync();
         if (!pdfPath) throw new Error("主 PDF 文件不在本机，无法转换");
         this.throwIfCancelled();
-        if (reuseCache) {
-          const cacheDir = await findLlmForZoteroMineruCache(pdf.id);
-          if (cacheDir) {
-            const result = await mineruResultFromLlmForZoteroCache(cacheDir);
-            this.throwIfCancelled();
-            if (result.markdown.trim()) {
-              onProgress({
-                itemKey: item.key,
-                state: "running",
-                message:
-                  "已复用 llm-for-zotero 的 MinerU 缓存，正在复制到研究数据库",
-              });
-              await IOUtils.makeDirectory(directory, { ignoreExisting: true });
-              const baseName = safeBaseName(pdfPath);
-              const title = `【MinerU原文】${baseName}.md`;
-              const markdownPath = PathUtils.join(directory, title);
-              await IOUtils.writeUTF8(markdownPath, result.markdown);
-              this.throwIfCancelled();
-              const figureArtifacts = [];
-              for (const figure of result.figures) {
-                this.throwIfCancelled();
-                const extension = safeImageExtension(figure.imageName);
-                const imageHash = await sha256Bytes(figure.bytes);
-                const imagePath = PathUtils.join(
-                  directory,
-                  `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
-                );
-                await (IOUtils as any).write(imagePath, figure.bytes);
-                this.throwIfCancelled();
-                figureArtifacts.push({
-                  role: figure.kind,
-                  path: imagePath,
-                  sha256: imageHash,
-                  title:
-                    figure.caption.trim() ||
-                    `${figure.kind === "table" ? "表格" : "图"} · 第 ${figure.pageIndex + 1} 页`,
-                  figure: {
-                    id: figure.id,
-                    caption: figure.caption,
-                    pageIndex: figure.pageIndex,
-                    rect: figure.rect,
-                    sourcePdfAttachmentKey: pdf.key,
-                  },
-                } as const);
-              }
-              onProgress({
-                itemKey: item.key,
-                state: "running",
-                message: "正在导入 Zotero 条目",
-              });
-              // Zotero attachment creation is not safely cancellable. Once
-              // this point is reached, finish the import and report its real
-              // outcome.
-              this.importing = true;
-              await importArtifacts({
-                libraryID: item.libraryID,
-                parentItemKey: item.key,
-                workflowRunID: `mineru-${Date.now()}-${item.key}`,
-                artifacts: [
-                  {
-                    role: "mineru-original",
-                    path: markdownPath,
-                    sha256: await sha256Text(result.markdown),
-                    title,
-                  },
-                  ...figureArtifacts,
-                ],
-              });
-              this.importing = false;
-              onProgress({
-                itemKey: item.key,
-                state: "success",
-                message: `已复用 llm-for-zotero 缓存：${title} 与 ${result.figures.length} 个图表已导入条目`,
-              });
-              continue;
-            }
-          }
+        if (!options.forceRefresh && (await readExistingMinerUMarkdown(item))) {
+          onProgress({
+            itemKey: item.key,
+            state: "success",
+            message:
+              "已有 MinerU Markdown，已复用且未重复解析；需要新版本时请勾选重新解析",
+          });
+          continue;
         }
-        onProgress({
-          itemKey: item.key,
-          state: "running",
-          message:
-            this.profile.mode === "local-client" &&
-            isMinerUDesktop(this.profile)
-              ? "正在投递主 PDF 到 MinerU Desktop"
-              : `正在转换主 PDF（${modeLabel(this.profile.mode)}）`,
+
+        const identity: SharedMinerUIdentity = {
+          libraryID: item.libraryID,
+          attachmentKey: pdf.key,
+          pdfSha256: await sha256Bytes(await IOUtils.read(pdfPath)),
+          pdfFileName: PathUtils.filename(pdfPath),
+        };
+        const claim = await claimSharedMinerUWork({
+          root: this.profile.sharedStoreDirectory,
+          identity,
+          timeoutMs: this.profile.timeoutMs,
+          forceRefresh: options.forceRefresh,
+          cancelled: () => this.cancelled,
+          onWaiting: () =>
+            onProgress({
+              itemKey: item.key,
+              state: "running",
+              message: "另一任务正在解析相同 PDF，等待复用其产物",
+            }),
         });
-        await IOUtils.makeDirectory(directory, { ignoreExisting: true });
-        const result = await this.convert(
-          pdfPath,
-          directory,
-          item.key,
-          (message) =>
-            onProgress({ itemKey: item.key, state: "running", message }),
-        );
+        let result: MinerUConversionResult | undefined;
+        let sourceLabel = "共享缓存";
+        try {
+          if (claim.cacheHit) {
+            result = await mineruResultFromDirectory(claim.paperDirectory);
+            await writeSharedMinerUIndex(
+              this.profile.sharedStoreDirectory,
+              identity,
+              "cache-import",
+            );
+          } else {
+            let sourceDirectory: string | undefined;
+            if (reuseLlmCache) {
+              sourceDirectory = await findLlmForZoteroMineruCache(pdf.id);
+              if (sourceDirectory) {
+                result =
+                  await mineruResultFromLlmForZoteroCache(sourceDirectory);
+                sourceLabel = "llm-for-zotero 缓存";
+              }
+            }
+            if (!result?.markdown.trim()) {
+              onProgress({
+                itemKey: item.key,
+                state: "running",
+                message: options.forceRefresh
+                  ? `正在重新解析主 PDF（${modeLabel(this.profile.mode)}）`
+                  : `正在转换主 PDF（${modeLabel(this.profile.mode)}）`,
+              });
+              result = await this.convert(pdfPath, item.key, (message) =>
+                onProgress({ itemKey: item.key, state: "running", message }),
+              );
+              sourceLabel = modeLabel(this.profile.mode);
+              sourceDirectory = undefined;
+            }
+            this.throwIfCancelled();
+            await writeSharedMinerUResult({
+              root: this.profile.sharedStoreDirectory,
+              identity,
+              result,
+              sourceMode: sourceDirectory ? "cache-import" : this.profile.mode,
+              sourceDirectory,
+              overwrite: options.forceRefresh,
+            });
+          }
+        } finally {
+          await claim.release();
+        }
         this.throwIfCancelled();
         if (!result.markdown.trim())
           throw new Error("MinerU 没有生成 Markdown");
-        const baseName = safeBaseName(pdfPath);
-        const title = `【MinerU原文】${baseName}.md`;
-        const markdownPath = PathUtils.join(directory, title);
-        await IOUtils.writeUTF8(markdownPath, result.markdown);
-        this.throwIfCancelled();
-        const figureArtifacts = [];
-        for (const figure of result.figures) {
-          this.throwIfCancelled();
-          const extension = safeImageExtension(figure.imageName);
-          const imageHash = await sha256Bytes(figure.bytes);
-          const imagePath = PathUtils.join(
-            directory,
-            `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
-          );
-          await (IOUtils as any).write(imagePath, figure.bytes);
-          this.throwIfCancelled();
-          figureArtifacts.push({
-            role: figure.kind,
-            path: imagePath,
-            sha256: imageHash,
-            title:
-              figure.caption.trim() ||
-              `${figure.kind === "table" ? "表格" : "图"} · 第 ${figure.pageIndex + 1} 页`,
-            figure: {
-              id: figure.id,
-              caption: figure.caption,
-              pageIndex: figure.pageIndex,
-              rect: figure.rect,
-              sourcePdfAttachmentKey: pdf.key,
-            },
-          } as const);
-        }
-        onProgress({
-          itemKey: item.key,
-          state: "running",
-          message: "正在导入 Zotero 条目",
-        });
-        // Zotero attachment creation is not safely cancellable. Once this
-        // point is reached, finish the import and report its real outcome.
-        this.importing = true;
-        await importArtifacts({
-          libraryID: item.libraryID,
-          parentItemKey: item.key,
-          workflowRunID: `mineru-${Date.now()}-${item.key}`,
-          artifacts: [
-            {
-              role: "mineru-original",
-              path: markdownPath,
-              sha256: await sha256Text(result.markdown),
-              title,
-            },
-            ...figureArtifacts,
-          ],
-        });
-        this.importing = false;
+        await IOUtils.makeDirectory(directory, { ignoreExisting: true });
+        const title = await this.importConversionResult(
+          item,
+          pdf,
+          pdfPath,
+          result,
+          directory,
+        );
         onProgress({
           itemKey: item.key,
           state: "success",
-          message: `${title} 与 ${result.figures.length} 个图表已导入条目`,
+          message: `${title} 与 ${result.figures.length} 个图表已导入条目（${sourceLabel}）`,
         });
       } catch (error) {
         const cancelledBeforeImport = this.cancelled && !this.importing;
@@ -518,106 +451,92 @@ export class MinerUConversionService {
     }
   }
 
-  async probe(): Promise<string> {
-    if (this.profile.mode === "local-client") {
-      const executable = await this.resolveExecutable();
-      if (isMinerUDesktop(this.profile)) {
-        const outputDirectory = await this.resolveDesktopOutputDirectory();
-        return `MinerU Desktop：${executable}；自动监听 ${outputDirectory}`;
-      }
-      const output = await this.runProcess(
-        executable,
-        ["--version"],
-        PathUtils.tempDir,
+  private async importConversionResult(
+    item: Zotero.Item,
+    pdf: Zotero.Item,
+    pdfPath: string,
+    result: MinerUConversionResult,
+    directory: string,
+  ): Promise<string> {
+    const title = `【MinerU原文】${safeBaseName(pdfPath)}.md`;
+    const markdownPath = PathUtils.join(directory, title);
+    await IOUtils.writeUTF8(markdownPath, result.markdown);
+    this.throwIfCancelled();
+    const figureArtifacts = [];
+    for (const figure of result.figures) {
+      this.throwIfCancelled();
+      const extension = safeImageExtension(figure.imageName);
+      const imageHash = await sha256Bytes(figure.bytes);
+      const imagePath = PathUtils.join(
+        directory,
+        `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
       );
-      return output.trim() || executable;
+      await (IOUtils as any).write(imagePath, figure.bytes);
+      this.throwIfCancelled();
+      figureArtifacts.push({
+        role: figure.kind,
+        path: imagePath,
+        sha256: imageHash,
+        title:
+          figure.caption.trim() ||
+          `${figure.kind === "table" ? "表格" : "图"} · 第 ${figure.pageIndex + 1} 页`,
+        figure: {
+          id: figure.id,
+          caption: figure.caption,
+          pageIndex: figure.pageIndex,
+          rect: figure.rect,
+          sourcePdfAttachmentKey: pdf.key,
+        },
+      } as const);
     }
+    // Zotero attachment creation is not safely cancellable. Once this point
+    // is reached, finish the import and report its real outcome.
+    this.importing = true;
+    await importArtifacts({
+      libraryID: item.libraryID,
+      parentItemKey: item.key,
+      workflowRunID: `mineru-${Date.now()}-${item.key}`,
+      artifacts: [
+        {
+          role: "mineru-original",
+          path: markdownPath,
+          sha256: await sha256Text(result.markdown),
+          title,
+        },
+        ...figureArtifacts,
+      ],
+    });
+    this.importing = false;
+    return title;
+  }
+
+  async probe(): Promise<string> {
     if (this.profile.mode === "self-hosted") {
       await this.ensureSelfHostedReady();
       return `MinerU 本地服务 ${this.profile.selfHostedEndpoint}`;
     }
     const endpoint = this.profile.officialEndpoint;
-    const url =
-      this.profile.mode === "official-api"
-        ? `${endpoint}/extract/task/invalid-zrdb-connection-test`
-        : `${endpoint}/health`;
-    const headers =
-      this.profile.mode === "official-api" ? this.officialHeaders() : {};
+    const url = `${endpoint}/extract/task/invalid-zrdb-connection-test`;
     const response = await fetchWithTimeout(
       url,
-      { headers },
+      { headers: this.officialHeaders() },
       this.profile.timeoutMs,
     );
-    if (this.profile.mode === "official-api") {
-      if ([401, 403].includes(response.status))
-        throw new Error("MinerU Token 无效");
-      return `MinerU 网页 API（HTTP ${response.status}，认证已通过）`;
-    }
-    if (!response.ok)
-      throw new Error(`MinerU 本地服务连接失败：HTTP ${response.status}`);
-    return `MinerU 本地服务 ${endpoint}`;
+    if ([401, 403].includes(response.status))
+      throw new Error("MinerU Token 无效");
+    return `MinerU 网页 API（HTTP ${response.status}，认证已通过）`;
   }
 
   private async convert(
     pdfPath: string,
-    directory: string,
     itemKey: string,
     onStatus: (message: string) => void,
   ): Promise<MinerUConversionResult> {
-    if (this.profile.mode === "local-client") {
-      if (isMinerUDesktop(this.profile))
-        return this.convertWithDesktop(pdfPath, onStatus);
-      return this.convertWithLocalClient(pdfPath, directory);
-    }
     if (this.profile.mode === "official-api") {
       return this.convertWithOfficialApi(pdfPath, itemKey);
     }
     await this.ensureSelfHostedReady(onStatus);
     return this.convertWithSelfHosted(pdfPath);
-  }
-
-  private async convertWithDesktop(
-    pdfPath: string,
-    onStatus: (message: string) => void,
-  ): Promise<MinerUConversionResult> {
-    const outputDirectory = await this.resolveDesktopOutputDirectory();
-    await IOUtils.makeDirectory(outputDirectory, { ignoreExisting: true });
-    const baseline = await desktopDirectorySnapshot(outputDirectory);
-    await this.openWithDesktop(pdfPath);
-    onStatus(
-      "已打开 MinerU Desktop；请在客户端点击“立即解析”，完成后将自动回传",
-    );
-    const resultDirectory = await waitForDesktopResultDirectory({
-      outputDirectory,
-      pdfFileName: PathUtils.filename(pdfPath),
-      baseline,
-      timeoutMs: this.profile.timeoutMs,
-      cancelled: () => this.cancelled,
-    });
-    onStatus("已检测到 Desktop 结果；正在读取 Markdown 与图表");
-    return mineruResultFromDirectory(resultDirectory, safeBaseName(pdfPath));
-  }
-
-  private async resolveDesktopOutputDirectory(): Promise<string> {
-    if (this.profile.desktopOutputDirectory)
-      return this.profile.desktopOutputDirectory;
-    const root = defaultMinerUHomeDirectory();
-    if (!root)
-      throw new Error(
-        "无法确定 MinerU Desktop 输出目录；请在设置中填写结果目录",
-      );
-    const configPath = PathUtils.join(root, "config.json");
-    if (await IOUtils.exists(configPath)) {
-      try {
-        const configured = mineruDesktopHistoryPathFromConfig(
-          toText(await Zotero.File.getContentsAsync(configPath, "utf-8")),
-        );
-        if (configured) return configured;
-      } catch {
-        // Keep the conventional ~/MinerU directory when the client config is malformed.
-      }
-    }
-    return root;
   }
 
   private async ensureSelfHostedReady(
@@ -753,44 +672,6 @@ export class MinerUConversionService {
     return {
       workdir: directory,
       arguments: buildMinerUDockerComposeArguments(composeFile),
-    };
-  }
-
-  private async convertWithLocalClient(
-    pdfPath: string,
-    directory: string,
-  ): Promise<MinerUConversionResult> {
-    const executable = await this.resolveExecutable();
-    await this.runProcess(
-      executable,
-      [
-        "-p",
-        pdfPath,
-        "-o",
-        directory,
-        "-b",
-        this.profile.backend,
-        "-m",
-        this.profile.method,
-        "-l",
-        this.profile.language,
-        "-f",
-        String(this.profile.enableFormula),
-        "-t",
-        String(this.profile.enableTable),
-        ...this.profile.args,
-      ],
-      directory,
-    );
-    const markdownFiles = await findFiles(directory, (path) =>
-      /\.md$/i.test(path),
-    );
-    if (!markdownFiles.length)
-      throw new Error("MinerU 客户端没有生成 Markdown 文件");
-    const selected = selectMarkdownPath(markdownFiles, safeBaseName(pdfPath));
-    return {
-      markdown: toText(await Zotero.File.getContentsAsync(selected, "utf-8")),
-      figures: [],
     };
   }
 
@@ -1180,42 +1061,21 @@ export class MinerUConversionService {
   }
 
   private officialHeaders(): Record<string, string> {
-    const token = Services.env.get(this.profile.officialTokenEnvironment);
+    const directToken = this.profile.officialToken.trim();
+    const environment = this.profile.officialTokenEnvironment.trim();
+    if (!directToken && !isEnvironmentVariableName(environment)) {
+      throw new Error(
+        "MinerU API Token 未配置；请直接填写 API Token，或提供合法的环境变量名",
+      );
+    }
+    const token =
+      directToken || String(Services.env.get(environment) || "").trim();
     if (!token) {
       throw new Error(
-        `未找到环境变量 ${this.profile.officialTokenEnvironment}；请在启动 Zotero 前设置 MinerU Token`,
+        `未找到环境变量 ${environment}；请直接填写 API Token，或在启动 Zotero 前设置该环境变量`,
       );
     }
     return { Authorization: `Bearer ${token}` };
-  }
-
-  private async resolveExecutable(): Promise<string> {
-    const configured = this.profile.executable;
-    if (configured.includes("\\") || configured.includes("/")) {
-      if (!(await IOUtils.exists(configured)))
-        throw new Error(`MinerU 可执行文件不存在：${configured}`);
-      return configured;
-    }
-    try {
-      return await getSubprocess().pathSearch(configured);
-    } catch (error) {
-      throw new Error(
-        "没有找到 MinerU 客户端；请在设置中填写 mineru 可执行文件路径",
-        { cause: error },
-      );
-    }
-  }
-
-  private async openWithDesktop(pdfPath: string): Promise<void> {
-    const executable = await this.resolveExecutable();
-    const process = await getSubprocess().call({
-      command: executable,
-      arguments: [pdfPath],
-      environmentAppend: true,
-      stderr: "ignore",
-    });
-    await process.stdin.close();
-    void process.wait();
   }
 
   private async runProcess(
@@ -1275,15 +1135,8 @@ export class MinerUConversionService {
   }
 }
 
-export function mineruDesktopHistoryPathFromConfig(value: string): string {
-  const outer = JSON.parse(value) as Record<string, unknown>;
-  const rawConfig = outer.config;
-  const config =
-    typeof rawConfig === "string"
-      ? (JSON.parse(rawConfig) as Record<string, unknown>)
-      : (rawConfig as Record<string, unknown> | undefined) || outer;
-  const state = (config.state as Record<string, unknown> | undefined) || config;
-  return String(state.history_path || "").trim();
+function isEnvironmentVariableName(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
 }
 
 export function buildMinerUDockerComposeArguments(
@@ -1395,8 +1248,7 @@ export async function mineruResultFromDirectory(
 ): Promise<MinerUConversionResult> {
   const paths = await findFiles(directory, () => true);
   const markdownPaths = paths.filter((path) => /\.md$/i.test(path));
-  if (!markdownPaths.length)
-    throw new Error("MinerU Desktop 结果目录中没有 Markdown");
+  if (!markdownPaths.length) throw new Error("MinerU 结果目录中没有 Markdown");
   const selected = selectMarkdownPath(markdownPaths, preferredBaseName);
   const relativeNames = paths
     .map((path) => relativeLocalPath(directory, path))
@@ -1438,97 +1290,6 @@ export async function mineruResultFromDirectory(
     markdown: toText(await Zotero.File.getContentsAsync(selected, "utf-8")),
     figures: [...figureMap.values()],
   };
-}
-
-async function desktopDirectorySnapshot(
-  outputDirectory: string,
-): Promise<Map<string, number>> {
-  const snapshot = new Map<string, number>();
-  let children: string[];
-  try {
-    children = await (IOUtils as any).getChildren(outputDirectory);
-  } catch {
-    return snapshot;
-  }
-  for (const path of children) {
-    try {
-      const stat = await (IOUtils as any).stat(path);
-      if (stat.type === "directory")
-        snapshot.set(path, Number(stat.lastModified || 0));
-    } catch {
-      // A Desktop task may still be moving its temporary directory.
-    }
-  }
-  return snapshot;
-}
-
-async function waitForDesktopResultDirectory(options: {
-  outputDirectory: string;
-  pdfFileName: string;
-  baseline: Map<string, number>;
-  timeoutMs: number;
-  cancelled: () => boolean;
-}): Promise<string> {
-  const deadline = Date.now() + options.timeoutMs;
-  const expectedPrefix = `${options.pdfFileName}-`.toLocaleLowerCase();
-  let stablePath = "";
-  let stableSignature = "";
-  let stableChecks = 0;
-  while (Date.now() < deadline) {
-    if (options.cancelled()) throw new Error("已取消等待 MinerU Desktop 回传");
-    const current = await desktopDirectorySnapshot(options.outputDirectory);
-    const candidates = [...current.entries()]
-      .filter(([path, modified]) => {
-        const name = PathUtils.filename(path).toLocaleLowerCase();
-        const previous = options.baseline.get(path);
-        return (
-          name.startsWith(expectedPrefix) &&
-          (previous === undefined || modified > previous)
-        );
-      })
-      .sort((a, b) => b[1] - a[1]);
-    for (const [path] of candidates) {
-      try {
-        const files = await findFiles(path, () => true);
-        if (!files.some((file) => /\.md$/i.test(file))) continue;
-        const signatureParts: string[] = [];
-        for (const file of files) {
-          const stat = await (IOUtils as any).stat(file);
-          signatureParts.push(
-            `${relativeLocalPath(path, file)}:${Number(stat.size || 0)}:${Number(stat.lastModified || 0)}`,
-          );
-        }
-        const signature = signatureParts.sort().join("|");
-        if (stablePath === path && stableSignature === signature)
-          stableChecks += 1;
-        else {
-          stablePath = path;
-          stableSignature = signature;
-          stableChecks = 1;
-        }
-        if (stableChecks >= 2) return path;
-        break;
-      } catch {
-        // Files are still being generated; retry without importing partial output.
-      }
-    }
-    await delay(1200);
-  }
-  throw new Error(
-    `等待 MinerU Desktop 回传超时；请确认客户端已完成解析，输出目录为 ${options.outputDirectory}`,
-  );
-}
-
-function defaultMinerUHomeDirectory(): string {
-  try {
-    const home = Services.dirsvc.get(
-      "Home",
-      Components.interfaces.nsIFile,
-    ) as nsIFile;
-    return PathUtils.join(home.path, "MinerU");
-  } catch {
-    return "";
-  }
 }
 
 function createCompatibleAbortController(): AbortController | undefined {
@@ -1769,7 +1530,12 @@ async function mineruResultFromJSZip(
       });
     }
   }
-  return { markdown: candidates[0].text, figures: [...figureMap.values()] };
+  return {
+    markdown: candidates[0].text,
+    figures: [...figureMap.values()],
+    archive: bytes,
+    markdownArchivePath: candidates[0].name,
+  };
 }
 
 function hasNativeZipReader(): boolean {
@@ -1839,7 +1605,12 @@ async function mineruResultFromNativeZip(
         });
       }
     }
-    return { markdown: candidates[0].text, figures: [...figureMap.values()] };
+    return {
+      markdown: candidates[0].text,
+      figures: [...figureMap.values()],
+      archive: bytes,
+      markdownArchivePath: candidates[0].name,
+    };
   } catch (error) {
     if (error instanceof Error && error.message.includes("MinerU")) throw error;
     throw new Error("Zotero 无法读取 MinerU 结果压缩包", { cause: error });
@@ -2120,10 +1891,6 @@ async function sha256Bytes(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
-function isMinerUDesktop(profile: MinerUProfile): boolean {
-  return /(?:^|[\\/])MinerU\.exe$/i.test(profile.executable.trim());
-}
-
 function selectMarkdownPath(
   paths: string[],
   preferredBaseName: string,
@@ -2280,8 +2047,7 @@ function safeBaseName(path: string): string {
 
 function modeLabel(mode: MinerUMode): string {
   if (mode === "official-api") return "网页 API";
-  if (mode === "self-hosted") return "本地部署";
-  return "本地客户端";
+  return "本地部署";
 }
 
 function getSubprocess(): SubprocessAPI {

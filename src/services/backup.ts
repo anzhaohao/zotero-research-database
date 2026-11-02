@@ -28,10 +28,14 @@ export const BACKUP_FILE_NAMES = [
 ] as const;
 
 /**
- * The artifact import token is a machine-local credential. It is never
- * exported and never restored; the current machine keeps its own value.
+ * Machine-local credentials are never exported or restored; the current
+ * machine keeps its own values.
  */
-const EXCLUDED_PREF_KEYS = new Set<string>([API_TOKEN_PREF]);
+const EXCLUDED_PREF_KEYS = new Set<string>([
+  API_TOKEN_PREF,
+  "agentApiKey",
+  "mineruOfficialToken",
+]);
 
 export const EXPORTED_PREF_KEYS = [
   "enable",
@@ -58,9 +62,7 @@ export const EXPORTED_PREF_KEYS = [
   "agentTimeoutMs",
   "agentSettingsVersion",
   "mineruMode",
-  "mineruExecutable",
-  "mineruArgs",
-  "mineruDesktopOutputDirectory",
+  "mineruSharedStoreDirectory",
   "mineruOfficialEndpoint",
   "mineruOfficialTokenEnvironment",
   "mineruSelfHostedEndpoint",
@@ -598,7 +600,7 @@ export async function parseBackupArchive(
   )
     throw new Error("备份 prefs.json 格式无效");
   const prefs = prefsValue as Record<string, unknown>;
-  if (API_TOKEN_PREF in prefs)
+  if (Object.keys(prefs).some((key) => EXCLUDED_PREF_KEYS.has(key)))
     throw new Error("备份 prefs.json 包含敏感凭据，拒绝导入");
   const mapping = parseBackupMapping(
     parseJSON(contents[BACKUP_MAPPING_FILE], BACKUP_MAPPING_FILE),
@@ -676,7 +678,7 @@ export async function importBackupZip(
     conflicts: report.conflicts,
     appliedPrefs,
     credentialNote:
-      " artifactImportToken 属于敏感凭据，不会从备份恢复；已保留当前机器的值。",
+      " artifactImportToken、agentApiKey 和 mineruOfficialToken 属于敏感凭据，不会从备份恢复；已保留当前机器的值。",
   };
 }
 

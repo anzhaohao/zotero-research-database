@@ -64,6 +64,16 @@ async function readLocalItemState(
   return payload.items?.[`${item.libraryID}:${item.key.toUpperCase()}`];
 }
 
+async function waitForHostCondition(
+  condition: () => boolean,
+  attempts = 40,
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (condition()) return;
+    await Zotero.Promise.delay(50);
+  }
+}
+
 describe("startup", function () {
   it("round-trips a title through Translate for Zotero 2.4.6 without changing Zotero metadata", async function () {
     this.timeout(120_000);
@@ -331,6 +341,75 @@ describe("startup", function () {
     }
   });
 
+  it("should expose only edit copy and regenerate actions on custom cells", async function () {
+    const win = Zotero.getMainWindow();
+    const doc = win.document;
+    const item = new Zotero.Item("journalArticle");
+    item.libraryID = Zotero.Libraries.userLibraryID;
+    item.setField("title", "ZRDB custom cell action test");
+    await item.saveTx();
+    const customPane = doc.querySelector<HTMLElement>(
+      "#" + config.addonRef + "-custom-pane",
+    );
+    const toggleButton = doc.querySelector<HTMLElement>(
+      "#" + config.addonRef + "-view-toggle",
+    );
+    assert.exists(customPane);
+    assert.exists(toggleButton);
+    try {
+      await win.ZoteroPane.selectItem(item.id, true);
+      if (toggleButton!.getAttribute("data-mode") !== "table")
+        clickControl(win, toggleButton!);
+      let row: HTMLElement | undefined;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        row = [
+          ...customPane!.querySelectorAll<HTMLElement>(".zrdb-table-row"),
+        ].find((entry) => entry.textContent?.includes(item.getField("title")));
+        if (row) break;
+        await Zotero.Promise.delay(50);
+      }
+      assert.exists(row);
+      const workspace = await new ResearchRepository().loadWorkspace();
+      const field = workspace.fields.find(
+        (entry) =>
+          !entry.archived &&
+          entry.extraction.enabled &&
+          entry.id !== TRANSLATED_TITLE_FIELD_ID,
+      );
+      assert.exists(field);
+      const headers = [
+        ...customPane!.querySelectorAll<HTMLElement>(".zrdb-header-cell"),
+      ];
+      const columnIndex = headers.findIndex((header) =>
+        header.textContent?.includes(field!.name),
+      );
+      assert.isAtLeast(columnIndex, 0);
+      const cell = [...row!.querySelectorAll<HTMLElement>(".zrdb-table-cell")][
+        columnIndex
+      ];
+      assert.exists(cell);
+      cell!.click();
+      await Zotero.Promise.delay(40);
+      const labels = [
+        ...cell!.querySelectorAll<HTMLButtonElement>(
+          ".zrdb-cell-actions button",
+        ),
+      ].map((button) => button.getAttribute("aria-label"));
+      assert.deepEqual(labels, ["编辑", "复制内容", "重新生成"]);
+      assert.notExists(cell!.querySelector('[aria-label="设置单元格背景色"]'));
+      assert.notExists(cell!.querySelector('[aria-label="设置整行背景色"]'));
+      assert.notExists(cell!.querySelector('[aria-label="锁定字段"]'));
+      assert.isFalse(
+        cell!.querySelector<HTMLButtonElement>('[aria-label="重新生成"]')!
+          .disabled,
+      );
+    } finally {
+      if (toggleButton!.getAttribute("data-mode") === "table")
+        clickControl(win, toggleButton!);
+      await item.eraseTx();
+    }
+  });
+
   it("should replace the native XUL item pane in database modes", async function () {
     const win = Zotero.getMainWindow();
     assert.exists(win);
@@ -540,104 +619,19 @@ describe("startup", function () {
     );
     activeToolsTrigger!.click();
     await Zotero.Promise.delay(40);
-    const columnVisibilityButton = [
+    const columnLayoutButton = [
       ...activePane.querySelectorAll<HTMLButtonElement>(
         ".zrdb-toolbar-menu button",
       ),
     ].find((button) => button.textContent?.includes("列布局"));
-    assert.exists(columnVisibilityButton, "unified field and column entry");
-    assert.include(columnVisibilityButton!.textContent || "", "列布局");
-    columnVisibilityButton!.click();
-    await Zotero.Promise.delay(40);
-    const columnVisibilityModal = customPane!.querySelector<HTMLElement>(
-      '.zrdb-modal[aria-label="当前视图列布局"]',
+    assert.notExists(columnLayoutButton, "column layout manager is removed");
+    assert.notExists(
+      customPane!.querySelector(".zrdb-column-menu"),
+      "column headers do not open the removed layout manager",
     );
-    assert.exists(columnVisibilityModal);
-    assert.include(columnVisibilityModal!.textContent || "", "标题");
-    assert.include(columnVisibilityModal!.textContent || "", "基础信息");
-    assert.notExists(columnVisibilityModal!.querySelector('[role="tablist"]'));
-    assert.notInclude(columnVisibilityModal!.textContent || "", "自定义字段");
-    assert.exists(
-      [
-        ...columnVisibilityModal!.querySelectorAll<HTMLButtonElement>("button"),
-      ].find((button) => button.textContent?.includes("打开字段设置")),
-      "global field definitions have a single settings entry",
-    );
-    assert.isAtLeast(
-      columnVisibilityModal!.querySelectorAll(".zrdb-column-manager-grip")
-        .length,
-      3,
-      "every native and custom column can be dragged from the unified manager",
-    );
-    assert.isAtLeast(
-      columnVisibilityModal!.querySelectorAll('input[type="checkbox"]').length,
-      3,
-      "native and custom columns expose saved visibility checkboxes",
-    );
-    const managerRows = [
-      ...columnVisibilityModal!.querySelectorAll<HTMLElement>(
-        ".zrdb-column-manager-row",
-      ),
-    ];
-    const titleManagerRow = managerRows.find((row) =>
-      row.querySelector("strong")?.textContent?.includes("标题"),
-    );
-    const basicManagerRow = managerRows.find((row) =>
-      row.querySelector("strong")?.textContent?.includes("基础信息"),
-    );
-    const managerGrip = basicManagerRow?.querySelector<HTMLButtonElement>(
-      ".zrdb-column-manager-grip",
-    );
-    assert.exists(titleManagerRow);
-    assert.exists(managerGrip);
-    const managerGripRect = managerGrip!.getBoundingClientRect();
-    const managerTitleRect = titleManagerRow!.getBoundingClientRect();
-    managerGrip!.dispatchEvent(
-      new win.PointerEvent("pointerdown", {
-        bubbles: true,
-        clientX: managerGripRect.left + managerGripRect.width / 2,
-        clientY: managerGripRect.top + managerGripRect.height / 2,
-        pointerId: 29,
-        button: 0,
-        buttons: 1,
-      }),
-    );
-    titleManagerRow!.dispatchEvent(
-      new win.PointerEvent("pointermove", {
-        bubbles: true,
-        cancelable: true,
-        clientX: managerTitleRect.left + 4,
-        clientY: managerTitleRect.top + 2,
-        pointerId: 29,
-        buttons: 1,
-      }),
-    );
-    titleManagerRow!.dispatchEvent(
-      new win.PointerEvent("pointerup", {
-        bubbles: true,
-        cancelable: true,
-        clientX: managerTitleRect.left + 4,
-        clientY: managerTitleRect.top + 2,
-        pointerId: 29,
-      }),
-    );
-    await Zotero.Promise.delay(40);
-    const reorderedManagerRows = [
-      ...columnVisibilityModal!.querySelectorAll<HTMLElement>(
-        ".zrdb-column-manager-row",
-      ),
-    ];
-    const reorderedManagerTitleIndex = reorderedManagerRows.findIndex((row) =>
-      row.querySelector("strong")?.textContent?.includes("标题"),
-    );
-    const reorderedManagerBasicIndex = reorderedManagerRows.findIndex((row) =>
-      row.querySelector("strong")?.textContent?.includes("基础信息"),
-    );
-    assert.isBelow(reorderedManagerBasicIndex, reorderedManagerTitleIndex);
-    [...columnVisibilityModal!.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.includes("保存列布局"))!
-      .click();
-    await Zotero.Promise.delay(80);
+    const initialColumnOrder = [
+      ...customPane!.querySelectorAll<HTMLElement>(".zrdb-header-cell"),
+    ].map((header) => header.dataset.columnId);
     const pinMenu = [
       ...customPane!.querySelectorAll<HTMLDetailsElement>(
         "details.zrdb-menu-submenu",
@@ -665,11 +659,14 @@ describe("startup", function () {
       ),
     ].find((button) => button.textContent?.includes("基础信息"));
     assert.exists(selectedBasicPin, "selected pinned-column choice");
-    assert.include(
-      customPane!.querySelector<HTMLElement>(".zrdb-header-cell.is-pinned")
-        ?.textContent || "",
-      "基础信息",
-    );
+    const pinnedHeaderText = [
+      ...customPane!.querySelectorAll<HTMLElement>(
+        ".zrdb-header-cell.is-pinned",
+      ),
+    ]
+      .map((header) => header.textContent || "")
+      .join(" ");
+    assert.include(pinnedHeaderText, "基础信息");
     const currentPinGroup = customPane!.querySelector<HTMLElement>(
       '.zrdb-menu-choice-group[role="group"]',
     );
@@ -692,8 +689,8 @@ describe("startup", function () {
       ),
     ].map((header) => header.textContent || "");
     assert.lengthOf(pinnedLabels, 2);
-    assert.include(pinnedLabels[0], "基础信息");
-    assert.include(pinnedLabels[1], "标题");
+    assert.include(pinnedLabels.join(" "), "基础信息");
+    assert.include(pinnedLabels.join(" "), "标题");
     const pinnedHeaders = [
       ...customPane!.querySelectorAll<HTMLElement>(
         ".zrdb-header-cell.is-pinned",
@@ -735,16 +732,12 @@ describe("startup", function () {
       0,
       "clearing pins leaves no sticky header",
     );
-    const unpinnedHeaders = [
+    const unpinnedColumnOrder = [
       ...customPane!.querySelectorAll<HTMLElement>(".zrdb-header-cell"),
-    ];
-    assert.isBelow(
-      unpinnedHeaders.findIndex((header) =>
-        header.textContent?.includes("基础信息"),
-      ),
-      unpinnedHeaders.findIndex((header) =>
-        header.textContent?.includes("标题"),
-      ),
+    ].map((header) => header.dataset.columnId);
+    assert.deepEqual(
+      unpinnedColumnOrder,
+      initialColumnOrder,
       "unpinning restores the shared columnOrder instead of pin insertion order",
     );
     const processingMenu = [
@@ -765,7 +758,11 @@ describe("startup", function () {
     ].find((button) => button.textContent?.includes("MinerU 转换"));
     assert.exists(mineruShortcut, "dedicated MinerU conversion menu item");
     mineruShortcut!.click();
-    await Zotero.Promise.delay(80);
+    await waitForHostCondition(() =>
+      Boolean(
+        customPane!.querySelector('[role="dialog"][aria-label="文献处理"]'),
+      ),
+    );
     let externalToolsDialog = customPane!.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="文献处理"]',
     );
@@ -785,7 +782,7 @@ describe("startup", function () {
     );
     assert.lengthOf(
       externalToolsDialog!.querySelectorAll(
-        'select option[value="local-client"], select option[value="official-api"], select option[value="self-hosted"]',
+        'select option[value="official-api"], select option[value="self-hosted"]',
       ),
       0,
       "conversion dialog does not duplicate long-term MinerU configuration",
@@ -794,8 +791,16 @@ describe("startup", function () {
     assert.include(externalToolsDialog!.textContent || "", "打开 MinerU 设置");
     assert.include(
       externalToolsDialog!.textContent || "",
-      "请在客户端点击“立即解析”",
+      "默认复用已有 Markdown 与共享产物",
     );
+    const forceRefresh = externalToolsDialog!.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    assert.exists(forceRefresh, "explicit reparse option");
+    assert.isFalse(forceRefresh!.checked);
+    forceRefresh!.click();
+    assert.include(externalToolsDialog!.textContent || "", "重新解析选中 1 篇");
+    forceRefresh!.click();
     externalToolsDialog!
       .querySelector<HTMLButtonElement>("header button")!
       .click();
@@ -809,7 +814,11 @@ describe("startup", function () {
       "per-item main PDF management stays available",
     );
     primaryPdfItem!.click();
-    await Zotero.Promise.delay(80);
+    await waitForHostCondition(() =>
+      Boolean(
+        customPane!.querySelector('[role="dialog"][aria-label="文献处理"]'),
+      ),
+    );
     externalToolsDialog = customPane!.querySelector<HTMLElement>(
       '[role="dialog"][aria-label="文献处理"]',
     );
@@ -829,7 +838,7 @@ describe("startup", function () {
     );
     assert.lengthOf(
       externalToolsDialog!.querySelectorAll(
-        'select option[value="codex-cli"], select option[value="claude-code"], select option[value="hana-agent"], select option[value="ollama"], select option[value="custom-json-process"]',
+        'select option[value="codex-cli"], select option[value="claude-code"], select option[value="openai-compatible"], select option[value="ollama"], select option[value="custom-json-process"]',
       ),
       0,
       "processing dialog does not duplicate Agent configuration",
@@ -942,7 +951,12 @@ describe("startup", function () {
         pointerId: 29,
       }),
     );
-    await Zotero.Promise.delay(100);
+    await waitForHostCondition(
+      () =>
+        customPane!
+          .querySelector<HTMLElement>(".zrdb-pdf-thumbnail-stack")
+          ?.style.getPropertyValue("--zrdb-pdf-thumbnail-width") === "184px",
+    );
     const resizedPreviewStack = customPane!.querySelector<HTMLElement>(
       ".zrdb-pdf-thumbnail-stack",
     );
@@ -2087,17 +2101,17 @@ describe("startup", function () {
     }
   });
 
-  it("should read a completed MinerU Desktop directory without touching the library", async function () {
+  it("should read a completed MinerU result directory without touching the library", async function () {
     const directory = PathUtils.join(
       PathUtils.tempDir,
-      `zrdb-mineru-desktop-test-${Date.now()}`,
+      `zrdb-mineru-result-test-${Date.now()}`,
     );
     const images = PathUtils.join(directory, "images");
     try {
       await IOUtils.makeDirectory(images, { createAncestors: true });
       await IOUtils.writeUTF8(
         PathUtils.join(directory, "full.md"),
-        "# Desktop result\n\n正文",
+        "# MinerU result\n\n正文",
       );
       await IOUtils.writeUTF8(
         PathUtils.join(directory, "content_list.json"),
@@ -2105,7 +2119,7 @@ describe("startup", function () {
           {
             type: "image",
             img_path: "images/figure.png",
-            image_caption: ["Desktop Figure"],
+            image_caption: ["MinerU Figure"],
             page_idx: 1,
             bbox: [100, 200, 500, 700],
           },
@@ -2117,9 +2131,9 @@ describe("startup", function () {
       );
 
       const result = await mineruResultFromDirectory(directory, "paper");
-      assert.equal(result.markdown, "# Desktop result\n\n正文");
+      assert.equal(result.markdown, "# MinerU result\n\n正文");
       assert.lengthOf(result.figures, 1);
-      assert.equal(result.figures[0].caption, "Desktop Figure");
+      assert.equal(result.figures[0].caption, "MinerU Figure");
       assert.equal(result.figures[0].pageIndex, 1);
       assert.deepEqual([...result.figures[0].bytes], [1, 2, 3, 4]);
     } finally {

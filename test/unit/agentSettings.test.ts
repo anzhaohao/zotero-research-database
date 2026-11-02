@@ -38,7 +38,7 @@ describe("external Agent settings", function () {
     ).to.throw("JSON 字符串数组");
   });
 
-  it("supplies the verified Claude Code and HanaAgent local presets", function () {
+  it("supplies the Claude Code preset and retires Hana settings", function () {
     const common = {
       executable: "",
       args: "[]",
@@ -51,10 +51,25 @@ describe("external Agent settings", function () {
       "C:\\Users\\anzhaofeng\\.local\\bin\\claude.exe",
     );
     const hana = parseAgentProfile({ ...common, kind: "hana-agent" });
-    expect(hana.executable).to.equal("E:\\software\\Hanako\\HanaAgent.exe");
-    expect(hana.endpoint).to.equal(
-      "C:\\Users\\anzhaofeng\\.hanako\\server-info.json",
-    );
+    expect(hana.kind).to.equal("codex-cli");
+  });
+
+  it("keeps an OpenAI-compatible endpoint, API key and custom model", function () {
+    const profile = parseAgentProfile({
+      kind: "openai-compatible",
+      executable: "",
+      args: "[]",
+      endpoint: "https://example.com/compatible/v1/",
+      apiKey: "  local-secret  ",
+      model: "  provider/model  ",
+      timeoutMs: 30000,
+    });
+    expect(profile).to.include({
+      kind: "openai-compatible",
+      endpoint: "https://example.com/compatible/v1/",
+      apiKey: "local-secret",
+      model: "provider/model",
+    });
   });
 
   it("offers model suggestions per assistant while keeping newer models editable", function () {
@@ -64,7 +79,7 @@ describe("external Agent settings", function () {
     expect(
       getAgentModelPresets("claude-code").map((option) => option.value),
     ).to.include("claude-sonnet-4-5");
-    expect(getAgentModelPresets("hana-agent")).to.deep.equal([]);
+    expect(getAgentModelPresets("openai-compatible")).to.deep.equal([]);
     expect(getAgentModelPresets("ollama")).to.deep.equal([]);
   });
 });

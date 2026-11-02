@@ -9,11 +9,11 @@ import {
 const supportedKinds = new Set<AgentAdapterKind>([
   "codex-cli",
   "claude-code",
-  "hana-agent",
   "ollama",
+  "openai-compatible",
   "custom-json-process",
 ]);
-const AGENT_SETTINGS_VERSION = 1;
+const AGENT_SETTINGS_VERSION = 2;
 const LEGACY_CODEX_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_TIMEOUT_MS = 900_000;
 
@@ -23,9 +23,8 @@ export interface AgentModelOption {
 }
 
 /** Stable suggestions only; the input remains editable for newer/custom models. */
-export const AGENT_MODEL_PRESETS: Record<
-  "codex-cli" | "claude-code" | "hana-agent" | "ollama" | "custom-json-process",
-  readonly AgentModelOption[]
+export const AGENT_MODEL_PRESETS: Partial<
+  Record<AgentAdapterKind, readonly AgentModelOption[]>
 > = {
   "codex-cli": [
     { value: "", label: "自动选择（由 Codex 决定）" },
@@ -41,8 +40,8 @@ export const AGENT_MODEL_PRESETS: Record<
     { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
     { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
   ],
-  "hana-agent": [],
   ollama: [],
+  "openai-compatible": [],
   "custom-json-process": [],
 };
 
@@ -57,20 +56,17 @@ export interface AgentSettingsInput {
   executable: unknown;
   args: unknown;
   endpoint: unknown;
+  apiKey?: unknown;
   model: unknown;
   timeoutMs: unknown;
 }
 
 export const AGENT_PRESETS: Record<
-  "claude-code" | "hana-agent",
+  "claude-code",
   Pick<AgentProfile, "executable" | "endpoint">
 > = {
   "claude-code": {
     executable: "C:\\Users\\anzhaofeng\\.local\\bin\\claude.exe",
-  },
-  "hana-agent": {
-    executable: "E:\\software\\Hanako\\HanaAgent.exe",
-    endpoint: "C:\\Users\\anzhaofeng\\.hanako\\server-info.json",
   },
 };
 
@@ -96,12 +92,10 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
     args = parsed;
   }
   const timeoutMs = Number(input.timeoutMs);
-  const preset =
-    kind === "claude-code" || kind === "hana-agent"
-      ? AGENT_PRESETS[kind]
-      : undefined;
+  const preset = kind === "claude-code" ? AGENT_PRESETS[kind] : undefined;
   const rawExecutable = String(input.executable || "").trim();
   const rawEndpoint = String(input.endpoint || "").trim();
+  const apiKey = String(input.apiKey || "").trim();
   return {
     kind,
     executable:
@@ -109,11 +103,8 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
         ? preset.executable
         : rawExecutable) || undefined,
     args,
-    endpoint:
-      (kind === "hana-agent" &&
-      (!rawEndpoint || rawEndpoint === "http://127.0.0.1:11434")
-        ? preset?.endpoint
-        : rawEndpoint) || undefined,
+    endpoint: rawEndpoint || undefined,
+    ...(apiKey ? { apiKey } : {}),
     model: String(input.model || "").trim() || undefined,
     timeoutMs:
       Number.isFinite(timeoutMs) && timeoutMs >= 1000 ? timeoutMs : 900_000,
@@ -126,6 +117,7 @@ export function readAgentProfile(): AgentProfile {
     executable: getPref("agentExecutable"),
     args: getPref("agentArgs"),
     endpoint: getPref("agentEndpoint"),
+    apiKey: getPref("agentApiKey"),
     model: getPref("agentModel"),
     timeoutMs: getPref("agentTimeoutMs"),
   });
@@ -135,6 +127,8 @@ export function readAgentProfile(): AgentProfile {
 export function migrateAgentPreferences(): void {
   const version = Number(getPref("agentSettingsVersion") || 0);
   if (version >= AGENT_SETTINGS_VERSION) return;
+  if (String(getPref("agentKind") || "") === "hana-agent")
+    setPref("agentKind", "codex-cli");
   if (
     String(getPref("agentKind") || "codex-cli") === "codex-cli" &&
     Number(getPref("agentTimeoutMs")) === LEGACY_CODEX_TIMEOUT_MS
@@ -153,6 +147,7 @@ export function saveAgentProfile(profile: AgentProfile): void {
   setPref("agentExecutable", profile.executable || "");
   setPref("agentArgs", JSON.stringify(profile.args || []));
   setPref("agentEndpoint", profile.endpoint || "");
+  setPref("agentApiKey", profile.apiKey || "");
   setPref("agentModel", profile.model || "");
   setPref("agentTimeoutMs", profile.timeoutMs);
 }

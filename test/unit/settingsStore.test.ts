@@ -126,9 +126,13 @@ describe("portable settings persistence", function () {
 
   it("excludes local credentials and the bootstrap pointer when loading, reading and writing", async function () {
     prefs.set(prefKey("artifactImportToken"), "local-secret");
+    prefs.set(prefKey("agentApiKey"), "local-api-key");
+    prefs.set(prefKey("mineruOfficialToken"), "local-mineru-token");
     await seedSettings({
       agentModel: "old",
       artifactImportToken: "copied-secret",
+      agentApiKey: "copied-api-key",
+      mineruOfficialToken: "copied-mineru-token",
       dataRoot: "wrong-root",
       unknown: "unknown",
     });
@@ -136,12 +140,18 @@ describe("portable settings persistence", function () {
     expect(getPref("artifactImportToken")).to.equal("local-secret");
     expect(getPref("dataRoot")).to.equal(root);
     expect(getPortableSetting("artifactImportToken")).to.equal(undefined);
+    expect(getPortableSetting("agentApiKey")).to.equal(undefined);
+    expect(getPortableSetting("mineruOfficialToken")).to.equal(undefined);
     setPref("artifactImportToken", "rotated-secret");
+    setPref("agentApiKey", "rotated-api-key");
+    setPref("mineruOfficialToken", "rotated-mineru-token");
     setPref("dataRoot", root);
     setPref("agentModel", "new");
     await flushPortableSettings();
     expect((await readSettings()).values).to.deep.equal({ agentModel: "new" });
     expect(getPref("artifactImportToken")).to.equal("rotated-secret");
+    expect(getPref("agentApiKey")).to.equal("rotated-api-key");
+    expect(getPref("mineruOfficialToken")).to.equal("rotated-mineru-token");
   });
 
   it("reports failed persistence and permits a later save to retry", async function () {

@@ -401,6 +401,35 @@ describe("backup service", function () {
         parseBackupArchive(await buildZip(withToken)),
         /敏感凭据/,
       );
+
+      const prefsWithAPIKey = JSON.stringify({ agentApiKey: "secret" });
+      manifest2.files[BACKUP_PREFS_FILE] = await sha256Text(prefsWithAPIKey);
+      await expectRejected(
+        parseBackupArchive(
+          await buildZip({
+            ...contents,
+            [BACKUP_PREFS_FILE]: prefsWithAPIKey,
+            [BACKUP_MANIFEST_FILE]: JSON.stringify(manifest2),
+          }),
+        ),
+        /敏感凭据/,
+      );
+
+      const prefsWithMinerUToken = JSON.stringify({
+        mineruOfficialToken: "secret",
+      });
+      manifest2.files[BACKUP_PREFS_FILE] =
+        await sha256Text(prefsWithMinerUToken);
+      await expectRejected(
+        parseBackupArchive(
+          await buildZip({
+            ...contents,
+            [BACKUP_PREFS_FILE]: prefsWithMinerUToken,
+            [BACKUP_MANIFEST_FILE]: JSON.stringify(manifest2),
+          }),
+        ),
+        /敏感凭据/,
+      );
     });
 
     it("rejects non-ZIP input without touching anything", async function () {

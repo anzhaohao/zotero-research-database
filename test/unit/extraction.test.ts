@@ -197,6 +197,66 @@ describe("external Agent extraction", function () {
     expect(saved.fields["research-outcomes"].value).to.equal("Agent 新结果");
   });
 
+  it("regenerates only the requested cell and overwrites its manual value", async function () {
+    const workspace = createDefaultWorkspace();
+    let record = setManualValue(
+      createEmptyRecord(1, "ITEM0005"),
+      "research-question",
+      "手动修改的研究问题",
+    );
+    record = setManualValue(record, "research-outcomes", "保留的研究结果");
+    let saved = record;
+    let requested: string[] = [];
+    const repository = {
+      loadRecord: async () => record,
+      saveRecord: async (_item: Zotero.Item, next: typeof record) => {
+        saved = next;
+      },
+    } as unknown as ResearchRepository;
+    const agent = {
+      kind: "codex-cli",
+      cancel() {},
+      probe: async () => ({ executable: "codex", version: "test" }),
+      testStructuredOutput: async () => undefined,
+      extractFields: async (fields: typeof workspace.fields) => {
+        requested = fields.map((field) => field.id);
+        return {
+          value: { "research-question": "AI 重新生成的研究问题" },
+          executorVersion: "test",
+        };
+      },
+      synthesizeComparison: async () => ({ value: "", executorVersion: "" }),
+    } satisfies AgentBridge;
+    const service = new ExternalAgentExtractionService(
+      repository,
+      agent,
+      async () => ({
+        type: "pdf-fulltext",
+        text: "paper",
+        hash: "hash",
+        attachmentID: 2,
+      }),
+    );
+
+    await service.run(
+      [{ key: "ITEM0005" } as Zotero.Item],
+      workspace,
+      () => undefined,
+      {
+        requestedFieldIDs: ["research-question"],
+        overwriteLockedFields: true,
+      },
+    );
+
+    expect(requested).to.deep.equal(["research-question"]);
+    expect(saved.fields["research-question"].value).to.equal(
+      "AI 重新生成的研究问题",
+    );
+    expect(saved.fields["research-question"].locked).to.equal(false);
+    expect(saved.fields["research-outcomes"].value).to.equal("保留的研究结果");
+    expect(saved.fields["research-outcomes"].locked).to.equal(true);
+  });
+
   it("never exposes the Zotero PDF path when staging is unavailable", async function () {
     const workspace = createDefaultWorkspace();
     const record = createEmptyRecord(1, "ITEM0002");

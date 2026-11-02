@@ -1,14 +1,15 @@
 import { expect } from "chai";
 import JSZip from "jszip";
+import { config } from "../../package.json";
 import {
   buildSelfHostedMultipartBody,
   buildMinerUDockerComposeArguments,
   findLlmForZoteroMineruCache,
   markdownFromZip,
   MinerUConversionService,
-  mineruDesktopHistoryPathFromConfig,
   mineruResultFromLlmForZoteroCache,
   mineruResultFromZip,
+  migrateMinerUPreferences,
   parseMinerUProfile,
   readMinerUProfile,
   saveMinerUProfile,
@@ -107,8 +108,6 @@ function decodeMultipart(
 function selfHostedProfile() {
   return parseMinerUProfile({
     mode: "self-hosted",
-    executable: "mineru",
-    args: "[]",
     officialEndpoint: "",
     officialTokenEnvironment: "MINERU_API_TOKEN",
     selfHostedEndpoint: "http://127.0.0.1:8000",
@@ -120,6 +119,19 @@ function selfHostedProfile() {
     enableFormula: true,
     enableTable: false,
     timeoutMs: 120000,
+  });
+}
+
+function officialProfile(
+  officialToken = "",
+  officialTokenEnvironment = "MINERU_API_TOKEN",
+) {
+  return parseMinerUProfile({
+    ...selfHostedProfile(),
+    mode: "official-api",
+    officialEndpoint: "https://mineru.net/api/v4",
+    officialToken,
+    officialTokenEnvironment,
   });
 }
 
@@ -209,10 +221,8 @@ describe("MinerU integration", function () {
     });
     try {
       const initial = parseMinerUProfile({
-        mode: "local-client",
-        executable: "E:\\software\\MinerU\\MinerU.exe",
-        args: "[]",
-        desktopOutputDirectory: "C:\\MinerU\\history",
+        mode: "self-hosted",
+        sharedStoreDirectory: "E:\\shared-mineru",
         officialEndpoint: "",
         officialTokenEnvironment: "MINERU_API_TOKEN",
         selfHostedEndpoint: "http://127.0.0.1:8000",
@@ -234,7 +244,6 @@ describe("MinerU integration", function () {
       const updated = parseMinerUProfile({
         ...initial,
         mode: "self-hosted",
-        executable: "mineru",
         selfHostedEndpoint: "http://127.0.0.1:9000",
         selfHostedAutoStart: true,
         backend: "vlm",
@@ -246,7 +255,10 @@ describe("MinerU integration", function () {
       const secondService = new MinerUConversionService(readMinerUProfile());
 
       expect(firstService).not.to.equal(secondService);
-      expect((firstService as any).profile.mode).to.equal("local-client");
+      expect((firstService as any).profile.mode).to.equal("self-hosted");
+      expect((firstService as any).profile.sharedStoreDirectory).to.equal(
+        "E:\\shared-mineru",
+      );
       expect((secondService as any).profile.mode).to.equal("self-hosted");
       expect((secondService as any).profile.selfHostedEndpoint).to.equal(
         "http://127.0.0.1:9000",
@@ -258,11 +270,9 @@ describe("MinerU integration", function () {
     }
   });
 
-  it("parses the three supported modes without accepting shell arguments", function () {
+  it("supports only API modes and migrates the legacy client selection", function () {
     const profile = parseMinerUProfile({
       mode: "self-hosted",
-      executable: "mineru",
-      args: '["--image-analysis","false"]',
       officialEndpoint: "https://mineru.net/api/v4/",
       officialTokenEnvironment: "MINERU_API_TOKEN",
       selfHostedEndpoint: "http://127.0.0.1:8000/",
@@ -276,15 +286,136 @@ describe("MinerU integration", function () {
     });
 
     expect(profile.mode).to.equal("self-hosted");
-    expect(profile.args).to.deep.equal(["--image-analysis", "false"]);
     expect(profile.selfHostedEndpoint).to.equal("http://127.0.0.1:8000");
     expect(profile.officialEndpoint).to.equal("https://mineru.net/api/v4");
-    expect(() =>
-      parseMinerUProfile({
-        ...profile,
-        args: "--backend pipeline",
-      }),
-    ).to.throw("JSON 字符串数组");
+    expect(profile).not.to.have.property("executable");
+    expect(profile).not.to.have.property("args");
+    expect(
+      parseMinerUProfile({ ...profile, mode: "local-client" }).mode,
+    ).to.equal("self-hosted");
+  });
+
+  it("migrates a token mistakenly stored as an environment variable name", function () {
+    const prefix = `${config.prefsPrefix}.`;
+    const values = new Map<string, unknown>([
+      [`${prefix}mineruSettingsVersion`, 4],
+      [`${prefix}mineruOfficialTokenEnvironment`, "legacy-token.invalid"],
+      [`${prefix}mineruOfficialToken`, ""],
+    ]);
+    const restore = replaceGlobal("Zotero", {
+      Prefs: {
+        get: (key: string) => values.get(key),
+        set: (key: string, value: unknown) => values.set(key, value),
+        clear: (key: string) => values.delete(key),
+      },
+    });
+    try {
+      migrateMinerUPreferences();
+      expect(values.get(`${prefix}mineruOfficialToken`)).to.equal(
+        "legacy-token.invalid",
+      );
+      expect(values.get(`${prefix}mineruOfficialTokenEnvironment`)).to.equal(
+        "MINERU_API_TOKEN",
+      );
+      expect(values.get(`${prefix}mineruSettingsVersion`)).to.equal(5);
+
+      values.set(`${prefix}mineruSettingsVersion`, 4);
+      values.set(`${prefix}mineruOfficialToken`, "");
+      values.set(
+        `${prefix}mineruOfficialTokenEnvironment`,
+        "CUSTOM_MINERU_TOKEN",
+      );
+      migrateMinerUPreferences();
+      expect(values.get(`${prefix}mineruOfficialToken`)).to.equal("");
+      expect(values.get(`${prefix}mineruOfficialTokenEnvironment`)).to.equal(
+        "CUSTOM_MINERU_TOKEN",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("uses a directly entered token before the environment fallback", async function () {
+    let environmentReads = 0;
+    let authorization = "";
+    const restoreServices = replaceGlobal("Services", {
+      env: {
+        get: () => {
+          environmentReads += 1;
+          return "environment-test-token";
+        },
+      },
+    });
+    const restoreFetch = replaceGlobal(
+      "fetch",
+      async (_url: unknown, init?: RequestInit) => {
+        authorization = new Headers(init?.headers).get("Authorization") || "";
+        return new Response(null, { status: 404 });
+      },
+    );
+    try {
+      const result = await new MinerUConversionService(
+        officialProfile("  direct-test-token  "),
+      ).probe();
+      expect(result).to.include("认证已通过");
+      expect(authorization).to.equal("Bearer direct-test-token");
+      expect(environmentReads).to.equal(0);
+    } finally {
+      restoreFetch();
+      restoreServices();
+    }
+  });
+
+  it("falls back to the configured token environment variable", async function () {
+    let environmentName = "";
+    let authorization = "";
+    const restoreServices = replaceGlobal("Services", {
+      env: {
+        get: (name: string) => {
+          environmentName = name;
+          return "environment-test-token";
+        },
+      },
+    });
+    const restoreFetch = replaceGlobal(
+      "fetch",
+      async (_url: unknown, init?: RequestInit) => {
+        authorization = new Headers(init?.headers).get("Authorization") || "";
+        return new Response(null, { status: 404 });
+      },
+    );
+    try {
+      await new MinerUConversionService(officialProfile()).probe();
+      expect(environmentName).to.equal("MINERU_API_TOKEN");
+      expect(authorization).to.equal("Bearer environment-test-token");
+    } finally {
+      restoreFetch();
+      restoreServices();
+    }
+  });
+
+  it("reports missing credentials without echoing a misplaced token", async function () {
+    const misplacedToken = "legacy-token.invalid";
+    const restoreServices = replaceGlobal("Services", {
+      env: {
+        get: () => {
+          throw new Error("invalid environment names must not be read");
+        },
+      },
+    });
+    let failure: unknown;
+    try {
+      await new MinerUConversionService(
+        officialProfile("", misplacedToken),
+      ).probe();
+    } catch (error) {
+      failure = error;
+    } finally {
+      restoreServices();
+    }
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).to.include("请直接填写 API Token");
+    expect(message).not.to.include(misplacedToken);
   });
 
   it("selects full.md from a MinerU result archive", async function () {
@@ -629,8 +760,6 @@ describe("MinerU integration", function () {
 
   it("keeps the official API blank until that mode is selected", function () {
     const base = {
-      executable: "E:\\software\\MinerU\\MinerU.exe",
-      args: "[]",
       officialEndpoint: "",
       officialTokenEnvironment: "MINERU_API_TOKEN",
       selfHostedEndpoint: "http://127.0.0.1:8000",
@@ -648,18 +777,6 @@ describe("MinerU integration", function () {
     expect(() =>
       parseMinerUProfile({ ...base, mode: "official-api" }),
     ).to.throw("必须使用 HTTPS");
-  });
-
-  it("reads the Desktop history directory from the nested client config", function () {
-    expect(
-      mineruDesktopHistoryPathFromConfig(
-        JSON.stringify({
-          config: JSON.stringify({
-            state: { history_path: "C:\\Users\\tester\\MinerU" },
-          }),
-        }),
-      ),
-    ).to.equal("C:\\Users\\tester\\MinerU");
   });
 
   it("builds a fixed compose invocation without a shell command", function () {

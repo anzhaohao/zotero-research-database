@@ -183,7 +183,9 @@ describe("preferences persistence in the real Zotero settings window", function 
       figureImageQuality: "standard",
       motionEnabled: true,
       defaultRowHeight: 216,
+      agentApiKey: "ZRDB preferences local API key",
       agentModel: "ZRDB preferences 测试 model",
+      mineruOfficialToken: "ZRDB preferences saved MinerU token",
       mineruEnableFormula: false,
       mineruEnableTable: true,
     };
@@ -218,7 +220,11 @@ describe("preferences persistence in the real Zotero settings window", function 
         "http://127.0.0.1:18000",
         true,
       );
-      Zotero.Prefs.set(PREFIX + "mineruArgs", "[]", true);
+      Zotero.Prefs.set(
+        PREFIX + "mineruSharedStoreDirectory",
+        "E:\\software\\Zotero\\mineru-shared-store",
+        true,
+      );
       Zotero.Prefs.set(PREFIX + "artifactStorageRoot", "", true);
 
       const seededControls: Array<{
@@ -265,6 +271,20 @@ describe("preferences persistence in the real Zotero settings window", function 
       if (!motion.checked) await clickVisible(win!, motion);
       await open("agent");
       stage = "verify model picker choices";
+      const agentKind = control(win!, "agentKind") as HTMLSelectElement;
+      assert.exists(
+        agentKind.querySelector('option[value="openai-compatible"]'),
+        "OpenAI-compatible third-party models are configurable",
+      );
+      assert.notExists(
+        agentKind.querySelector('option[value="hana-agent"]'),
+        "retired Hana settings are absent",
+      );
+      assert.strictEqual(
+        (control(win!, "agentApiKey") as HTMLInputElement).type,
+        "password",
+        "API keys use a password control",
+      );
       const modelSelect = win!.document.getElementById(
         "zrdb-agent-model-select",
       ) as HTMLSelectElement | null;
@@ -288,8 +308,18 @@ describe("preferences persistence in the real Zotero settings window", function 
         );
       }
       stage = "change string value";
+      setValue("agentApiKey", String(expected.agentApiKey));
       setValue("agentModel", String(expected.agentModel));
       await open("mineru");
+      stage = "verify MinerU token control";
+      assert.strictEqual(
+        (control(win!, "mineruOfficialToken") as HTMLInputElement).type,
+        "password",
+        "MinerU API tokens use a password control",
+      );
+      setValue("mineruMode", "official-api");
+      setValue("mineruOfficialEndpoint", "https://mineru.net/api/v4");
+      setValue("mineruOfficialToken", String(expected.mineruOfficialToken));
       for (const key of ["mineruEnableFormula", "mineruEnableTable"]) {
         stage = "toggle MinerU checkbox " + key;
         const input = control(win!, key) as HTMLInputElement;

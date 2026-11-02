@@ -52,7 +52,10 @@ export function AgentBridgeManager({
     return () => mainWindow?.removeEventListener("focus", refreshSavedMode);
   }, []);
 
-  const runMinerU = async (targets: Zotero.Item[]): Promise<void> => {
+  const runMinerU = async (
+    targets: Zotero.Item[],
+    forceRefresh = false,
+  ): Promise<void> => {
     if (!targets.length || mineruServiceRef.current) return;
     let profile: MinerUProfile;
     try {
@@ -71,17 +74,21 @@ export function AgentBridgeManager({
       `正在使用 ${mineruModeLabel(profile.mode)} 转换 ${targets.length} 篇论文……`,
     );
     try {
-      await service.run(targets, (entry) => {
-        setMineruImporting(
-          entry.state === "running" &&
-            entry.message.includes("正在导入 Zotero"),
-        );
-        setMineruProgress((current) => {
-          const next = new Map(current);
-          next.set(entry.itemKey, entry);
-          return next;
-        });
-      });
+      await service.run(
+        targets,
+        (entry) => {
+          setMineruImporting(
+            entry.state === "running" &&
+              entry.message.includes("正在导入 Zotero"),
+          );
+          setMineruProgress((current) => {
+            const next = new Map(current);
+            next.set(entry.itemKey, entry);
+            return next;
+          });
+        },
+        { forceRefresh },
+      );
       await onArtifactsImported();
       setStatus("MinerU 队列已结束；Markdown 与图表已刷新到对应条目");
     } catch (error) {
@@ -135,7 +142,6 @@ export function AgentBridgeManager({
       {toolTab === "mineru" && (
         <MinerUConfigurationPanel
           modeLabel={savedMode ? mineruModeLabel(savedMode) : "读取已保存配置"}
-          desktopMode={savedMode === "local-client"}
           items={items}
           mineruRunning={mineruRunning}
           mineruImporting={mineruImporting}

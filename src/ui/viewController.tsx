@@ -134,7 +134,8 @@ export class MainViewController {
     );
     this.installSourceChangeListeners();
     this.localDataUnsubscribe = onLocalResearchDataChanged((change) => {
-      if (change.scope === "translated-title") return;
+      if (change.scope === "record" || change.scope === "translated-title")
+        return;
       void this.nativeArtifactVisibility?.refresh();
       if (!this.libraryTabActive || this.mode === "default") return;
       this.scheduleRefresh();

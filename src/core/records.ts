@@ -53,10 +53,11 @@ export function applyAgentValues(
   record: ItemResearchRecord,
   values: Record<string, unknown>,
   audit: FieldAudit,
+  options: { overwriteLocked?: boolean } = {},
 ): ItemResearchRecord {
   let next = record;
   for (const [fieldID, value] of Object.entries(values)) {
-    if (next.fields[fieldID]?.locked) continue;
+    if (next.fields[fieldID]?.locked && !options.overwriteLocked) continue;
     next = setValue(next, fieldID, {
       value,
       locked: false,

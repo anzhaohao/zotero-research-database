@@ -8,11 +8,13 @@ export type ContentSourceRepository = Pick<
   "loadArtifacts" | "loadPrimaryPdfKey" | "savePrimaryPdfKey"
 >;
 
-export async function resolveSourceText(
+export async function readExistingMinerUMarkdown(
   item: Zotero.Item,
   repository: ContentSourceRepository = getResearchRepository(),
-): Promise<SourceText> {
-  const attachments = await Zotero.Items.getAsync(item.getAttachments());
+  existingAttachments?: Zotero.Item[],
+): Promise<{ attachment: Zotero.Item; text: string } | undefined> {
+  const attachments =
+    existingAttachments || (await Zotero.Items.getAsync(item.getAttachments()));
   const activeMinerUKeys = new Set(
     (await repository.loadArtifacts(item))
       .filter(
@@ -20,27 +22,44 @@ export async function resolveSourceText(
       )
       .map((artifact) => artifact.attachmentKey),
   );
-  const mineru = attachments
+  const candidates = attachments
     .filter((attachment) => isMinerUAttachment(attachment, activeMinerUKeys))
-    .sort((a, b) => b.dateModified.localeCompare(a.dateModified))[0];
+    .sort((a, b) => b.dateModified.localeCompare(a.dateModified));
+  for (const attachment of candidates) {
+    const path = await attachment.getFilePathAsync();
+    if (!path) continue;
+    try {
+      const text = toText(await Zotero.File.getContentsAsync(path, "utf-8"));
+      if (text.trim()) return { attachment, text };
+    } catch {
+      // A missing or partially written attachment must not block reconversion.
+    }
+  }
+  return undefined;
+}
+
+export async function resolveSourceText(
+  item: Zotero.Item,
+  repository: ContentSourceRepository = getResearchRepository(),
+): Promise<SourceText> {
+  const attachments = await Zotero.Items.getAsync(item.getAttachments());
+  const mineru = await readExistingMinerUMarkdown(
+    item,
+    repository,
+    attachments,
+  );
   const pdf = (await resolvePrimaryPdf(item, attachments, repository))
     ?.attachment;
   const pdfPathValue = pdf ? await pdf.getFilePathAsync() : undefined;
   const pdfPath = typeof pdfPathValue === "string" ? pdfPathValue : undefined;
   if (mineru) {
-    const path = await mineru.getFilePathAsync();
-    if (path) {
-      const text = toText(await Zotero.File.getContentsAsync(path, "utf-8"));
-      if (text.trim()) {
-        return {
-          type: "mineru-markdown",
-          text,
-          hash: await sha256Text(text),
-          attachmentID: mineru.id,
-          pdfPath,
-        };
-      }
-    }
+    return {
+      type: "mineru-markdown",
+      text: mineru.text,
+      hash: await sha256Text(mineru.text),
+      attachmentID: mineru.attachment.id,
+      pdfPath,
+    };
   }
 
   if (!pdf) throw new Error("条目下没有 MinerU Markdown 或主 PDF 附件");

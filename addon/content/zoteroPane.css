@@ -870,21 +870,6 @@ button.zrdb-view-toggle:active {
   font-weight: 550;
 }
 
-.zrdb-column-menu {
-  margin-inline-start: auto;
-  border: 0 !important;
-  padding: 1px 3px !important;
-  color: GrayText;
-  background: transparent !important;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.zrdb-header-cell:hover .zrdb-column-menu,
-.zrdb-column-menu:focus-visible {
-  opacity: 1;
-}
-
 .zrdb-cell-actions {
   position: absolute;
   z-index: 3;
@@ -1093,39 +1078,6 @@ button.zrdb-view-toggle:active {
 .zrdb-dialog-hint {
   margin: 0 0 10px;
   color: GrayText;
-}
-
-.zrdb-column-manager {
-  display: grid;
-  gap: 5px;
-}
-
-.zrdb-column-manager-row {
-  display: grid;
-  grid-template-columns:
-    62px minmax(120px, 0.7fr) minmax(160px, 1fr)
-    62px 32px 32px auto;
-  align-items: center;
-  gap: 6px;
-  padding: 7px;
-  border: 1px solid var(--zrdb-line);
-  border-radius: 6px;
-}
-
-.zrdb-column-manager-row.is-focus {
-  border-color: color-mix(in srgb, var(--zrdb-blue) 65%, transparent);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in srgb, var(--zrdb-blue) 30%, transparent);
-}
-
-.zrdb-column-manager-row input[type="text"],
-.zrdb-column-manager-row input:not([type]) {
-  min-width: 0;
-  border: 1px solid var(--zrdb-line);
-  border-radius: 4px;
-  padding: 4px 6px;
-  color: inherit;
-  background: Canvas;
 }
 
 .zrdb-table-row,
@@ -2364,21 +2316,6 @@ button.zrdb-view-toggle:active {
   opacity: 0.78;
 }
 
-.zrdb-column-menu {
-  display: grid;
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
-  place-items: center;
-  border-radius: 4px !important;
-}
-
-.zrdb-column-menu .zrdb-ui-icon {
-  width: 14px;
-  height: 14px;
-}
-
 .zrdb-header-cell.is-dragging {
   opacity: 0.42;
 }
@@ -3300,115 +3237,6 @@ button.zrdb-view-toggle:active {
   background: var(--zrdb-surface);
   box-shadow: 0 1px 3px rgba(33, 32, 29, 0.1);
   outline: 0;
-}
-
-.zrdb-column-manager-row {
-  grid-template-columns:
-    26px 58px minmax(112px, 0.62fr) minmax(150px, 1fr)
-    92px auto;
-  gap: 8px;
-  align-items: center;
-  min-height: 42px;
-  transition:
-    background-color 120ms ease,
-    opacity 120ms ease;
-}
-
-.zrdb-column-manager-row.is-dragging {
-  opacity: 0.46;
-}
-
-.zrdb-column-manager-row.is-drop-before,
-.zrdb-column-manager-row.is-drop-after {
-  position: relative;
-}
-
-.zrdb-column-manager-row.is-drop-before::before,
-.zrdb-column-manager-row.is-drop-after::after {
-  position: absolute;
-  right: 8px;
-  left: 8px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--zrdb-blue);
-  content: "";
-}
-
-.zrdb-column-manager-row.is-drop-before::before {
-  top: -2px;
-}
-
-.zrdb-column-manager-row.is-drop-after::after {
-  bottom: -2px;
-}
-
-.zrdb-column-manager-grip {
-  display: grid;
-  width: 24px;
-  height: 28px;
-  box-sizing: border-box;
-  grid-template-columns: repeat(2, 3px);
-  grid-template-rows: repeat(3, 3px);
-  place-content: center;
-  gap: 2px;
-  margin: 0;
-  border: 0;
-  border-radius: 5px;
-  padding: 0;
-  color: var(--zrdb-faint);
-  background: transparent;
-  cursor: grab;
-  opacity: 0.68;
-  touch-action: none;
-  user-select: none;
-}
-
-.zrdb-column-manager-grip:hover,
-.zrdb-column-manager-grip:focus-visible {
-  color: var(--zrdb-ink);
-  background: var(--zrdb-soft);
-  opacity: 1;
-  outline: 0;
-}
-
-.zrdb-column-manager-row.is-dragging .zrdb-column-manager-grip {
-  cursor: grabbing;
-}
-
-.zrdb-column-manager-grip i {
-  display: block;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: currentColor;
-  pointer-events: none;
-}
-
-.zrdb-manager-reset-label {
-  min-width: max-content;
-  border: 0;
-  padding: 5px 7px;
-  color: var(--zrdb-muted);
-  background: transparent;
-  font-size: 11px;
-}
-
-.zrdb-manager-reset-label:hover,
-.zrdb-manager-reset-label:focus-visible {
-  color: var(--zrdb-ink);
-  background: var(--zrdb-soft);
-  outline: 0;
-}
-
-@media (max-width: 850px) {
-  .zrdb-column-manager-row {
-    grid-template-columns: 26px 58px minmax(105px, 1fr) minmax(130px, 1fr);
-  }
-
-  .zrdb-column-manager-row > label:last-of-type,
-  .zrdb-manager-reset-label {
-    grid-column: 3 / -1;
-  }
 }
 
 .zrdb-formula-renderer {

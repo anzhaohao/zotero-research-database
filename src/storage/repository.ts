@@ -36,6 +36,7 @@ import {
   ResearchSyncedStore,
   createItemInternalState,
   getMigrationSyncedSettings,
+  type ResearchDataChangeScope,
   type ResearchDataStore,
 } from "./syncedData";
 import { ResearchLocalStore } from "./localData";
@@ -174,7 +175,7 @@ export class ResearchRepository {
       const state =
         (await this.loadItemState(item)) ||
         createItemInternalState(item.libraryID, item.key);
-      await this.saveItemState(item, { ...state, record });
+      await this.saveItemState(item, { ...state, record }, "record");
     });
   }
 
@@ -196,7 +197,7 @@ export class ResearchRepository {
         state.record || createEmptyRecord(item.libraryID, item.key);
       const next = await updater(current);
       this.assertRecordIdentity(item, next);
-      await this.saveItemState(item, { ...state, record: next });
+      await this.saveItemState(item, { ...state, record: next }, "record");
       return this.store.getItem(item.libraryID, item.key)?.record || next;
     });
   }
@@ -487,10 +488,11 @@ export class ResearchRepository {
   private async saveItemState(
     item: Zotero.Item,
     state: ItemInternalState,
+    changeScope: ResearchDataChangeScope = "all",
   ): Promise<void> {
     await this.ready();
     this.assertStateIdentity(item, state);
-    await this.store.setItem(state);
+    await this.store.setItem(state, { changeScope });
     // The store has already read the value back successfully. Only now is it
     // safe to remove the obsolete, user-visible Extra lines.
     await this.cleanupItemExtra(item);

@@ -30,6 +30,8 @@ export interface PreparedExtractionText {
 export interface ExtractionRunOptions {
   /** Restrict a run to these stable research field IDs. */
   requestedFieldIDs?: string[];
+  /** Allow an explicit single-cell regeneration to replace manual edits. */
+  overwriteLockedFields?: boolean;
 }
 
 export class ExternalAgentExtractionService {
@@ -85,6 +87,7 @@ export class ExternalAgentExtractionService {
           workspace.fields,
           record,
           requestedFieldIDs,
+          options.overwriteLockedFields,
         );
         fieldIDs = fields.map((field) => field.id);
         if (!fields.length) {
@@ -178,14 +181,19 @@ export class ExternalAgentExtractionService {
         if (typeof repositoryWithUpdater.updateRecord === "function") {
           await repositoryWithUpdater.updateRecord(
             item,
-            (latest) => applyAgentValues(latest, result.value, audit),
+            (latest) =>
+              applyAgentValues(latest, result.value, audit, {
+                overwriteLocked: options.overwriteLockedFields,
+              }),
             workspace.fields,
           );
         } else {
           // Compatibility for lightweight test doubles and older integrations.
           await this.repository.saveRecord(
             item,
-            applyAgentValues(record, result.value, audit),
+            applyAgentValues(record, result.value, audit, {
+              overwriteLocked: options.overwriteLockedFields,
+            }),
             workspace.fields,
           );
         }
@@ -421,12 +429,13 @@ function eligibleFields(
   fields: FieldDefinition[],
   record: ItemResearchRecord,
   requestedFieldIDs?: ReadonlySet<string>,
+  overwriteLockedFields = false,
 ): FieldDefinition[] {
   return fields.filter(
     (field) =>
       field.extraction.enabled &&
       !field.archived &&
       (!requestedFieldIDs || requestedFieldIDs.has(field.id)) &&
-      !record.fields[field.id]?.locked,
+      (overwriteLockedFields || !record.fields[field.id]?.locked),
   );
 }

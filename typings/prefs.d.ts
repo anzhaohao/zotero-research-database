@@ -33,14 +33,14 @@ declare namespace _ZoteroTypes {
       "agentExecutable": string;
       "agentArgs": string;
       "agentEndpoint": string;
+      "agentApiKey": string;
       "agentModel": string;
       "agentTimeoutMs": number;
       "agentSettingsVersion": number;
       "mineruMode": string;
-      "mineruExecutable": string;
-      "mineruArgs": string;
-      "mineruDesktopOutputDirectory": string;
+      "mineruSharedStoreDirectory": string;
       "mineruOfficialEndpoint": string;
+      "mineruOfficialToken": string;
       "mineruOfficialTokenEnvironment": string;
       "mineruSelfHostedEndpoint": string;
       "mineruSelfHostedAutoStart": boolean;

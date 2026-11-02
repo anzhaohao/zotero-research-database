@@ -30,7 +30,7 @@ import {
   COLUMN_DRAG_HOLD_MS,
 } from "./tableConstants";
 import { year, displayValue, nativeValue } from "../shared/display";
-import { UIIcon, ResearchTextValue, IconButton } from "../shared/ui";
+import { ResearchTextValue, IconButton } from "../shared/ui";
 import { PdfPreview } from "../pdf/PdfPreview";
 import { FigureGallery } from "../figures/FigureGallery";
 import { InlineCellEditor, TitleCell, BasicInfoCell } from "./TableCells";
@@ -46,6 +46,7 @@ export function TableView(props: {
   layout: ViewLayout;
   editing?: EditingCell;
   progress: Map<string, ExtractionProgress>;
+  extracting: boolean;
   onLayout: (layout: ViewLayout) => void;
   onSelect: (item: Zotero.Item, event: React.MouseEvent) => Promise<void>;
   onBeginEdit: (item: Zotero.Item, column: ColumnDefinition) => void;
@@ -60,8 +61,10 @@ export function TableView(props: {
     value: string,
   ) => Promise<void>;
   onCancelEdit: () => void;
-  onToggleLock: (item: Zotero.Item, field: FieldDefinition) => Promise<void>;
-  onManageColumns: (columnID: string) => void;
+  onRegenerateField: (
+    item: Zotero.Item,
+    field: FieldDefinition,
+  ) => Promise<void>;
   onTranslateTitle: (item: Zotero.Item) => Promise<void>;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -393,16 +396,23 @@ export function TableView(props: {
     });
   };
 
-  const pinnedLeft = (columnID: string): number | undefined => {
-    return pinnedLeftOffset(
-      columnID,
-      columns.map((column) => column.id),
-      shownLayout.pinnedColumnIDs,
-      Object.fromEntries(
-        columns.map((column) => [column.id, columnWidth(column.id)]),
-      ),
+  const pinnedLeftOffsets = useMemo(() => {
+    const renderedColumnIDs = columns.map((column) => column.id);
+    const columnWidths = Object.fromEntries(
+      columns.map((column) => [column.id, columnWidth(column.id)]),
     );
-  };
+    return new Map(
+      renderedColumnIDs.map((columnID) => [
+        columnID,
+        pinnedLeftOffset(
+          columnID,
+          renderedColumnIDs,
+          shownLayout.pinnedColumnIDs,
+          columnWidths,
+        ),
+      ]),
+    );
+  }, [columns, shownLayout]);
 
   const openColorMenu = (
     event: React.MouseEvent,
@@ -446,11 +456,7 @@ export function TableView(props: {
               className={`zrdb-table-cell zrdb-header-cell ${shownLayout.pinnedColumnIDs.includes(column.id) ? "is-pinned" : ""} ${selectedColumnID === column.id ? "is-column-selected" : ""} ${draggingColumnID === column.id ? "is-dragging" : ""} ${dropTarget?.columnID === column.id ? (dropTarget.after ? "is-drop-after" : "is-drop-before") : ""}`}
               style={{
                 width: columnWidth(column.id),
-                left: pinnedLeft(column.id),
-              }}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                props.onManageColumns(column.id);
+                left: pinnedLeftOffsets.get(column.id),
               }}
             >
               <button
@@ -473,18 +479,6 @@ export function TableView(props: {
               {shownLayout.pinnedColumnIDs.includes(column.id) && (
                 <small className="zrdb-pin-mark">固定</small>
               )}
-              <button
-                className="zrdb-column-menu"
-                type="button"
-                title="管理此列"
-                aria-label={`管理“${column.label}”列`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  props.onManageColumns(column.id);
-                }}
-              >
-                <UIIcon name="columns" />
-              </button>
               <span
                 className="zrdb-column-resizer"
                 onPointerDown={(event) => resizeColumn(event, column.id)}
@@ -569,7 +563,7 @@ export function TableView(props: {
                         background: colorValue(
                           shownLayout.cellColors[`${item.key}:${column.id}`],
                         ),
-                        left: pinnedLeft(column.id),
+                        left: pinnedLeftOffsets.get(column.id),
                       }}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -694,36 +688,52 @@ export function TableView(props: {
                               }
                             />
                           )}
-                          <IconButton
-                            icon="color"
-                            label="设置单元格背景色"
-                            onClick={(event) =>
-                              openColorMenu(event, {
-                                kind: "cell",
-                                itemKey: item.key,
-                                columnID: column.id,
-                              })
-                            }
-                          />
-                          <IconButton
-                            icon="rowColor"
-                            label="设置整行背景色"
-                            onClick={(event) =>
-                              openColorMenu(event, {
-                                kind: "row",
-                                itemKey: item.key,
-                              })
-                            }
-                          />
-                          {column.field && stored && (
+                          {column.field ? (
                             <IconButton
-                              icon={stored.locked ? "lock" : "unlock"}
-                              label={stored.locked ? "解锁字段" : "锁定字段"}
+                              icon="refresh"
+                              label={
+                                !column.field.extraction.enabled
+                                  ? "未启用 AI 提取"
+                                  : props.extracting
+                                    ? "AI 任务进行中"
+                                    : "重新生成"
+                              }
+                              disabled={
+                                props.extracting ||
+                                !column.field.extraction.enabled
+                              }
                               onClick={(event) => {
                                 event.stopPropagation();
-                                void props.onToggleLock(item, column.field!);
+                                void props.onRegenerateField(
+                                  item,
+                                  column.field!,
+                                );
                               }}
                             />
+                          ) : (
+                            <>
+                              <IconButton
+                                icon="color"
+                                label="设置单元格背景色"
+                                onClick={(event) =>
+                                  openColorMenu(event, {
+                                    kind: "cell",
+                                    itemKey: item.key,
+                                    columnID: column.id,
+                                  })
+                                }
+                              />
+                              <IconButton
+                                icon="rowColor"
+                                label="设置整行背景色"
+                                onClick={(event) =>
+                                  openColorMenu(event, {
+                                    kind: "row",
+                                    itemKey: item.key,
+                                  })
+                                }
+                              />
+                            </>
                           )}
                         </span>
                       )}

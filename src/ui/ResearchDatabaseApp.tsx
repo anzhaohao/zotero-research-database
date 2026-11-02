@@ -21,11 +21,7 @@ import type {
   SavedView,
   WorkspaceState,
 } from "../domain/types";
-import {
-  createEmptyRecord,
-  setFieldLock,
-  setManualValue,
-} from "../core/records";
+import { createEmptyRecord, setManualValue } from "../core/records";
 import { togglePinnedColumnIDs } from "../core/viewLayout";
 import {
   ResearchRepository,
@@ -62,7 +58,6 @@ import { useResearchData } from "./features/table/useResearchData";
 import { useColumns } from "./features/table/useColumns";
 import { ProgressBar } from "./features/agent/ProgressBar";
 import { TableView } from "./features/table/TableView";
-import { ColumnManager } from "./features/table/ColumnManager";
 import { AgentBridgeManager } from "./features/agent/AgentBridgeManager";
 import { RowHeightManager } from "./features/table/RowHeightManager";
 import { ComparisonManager } from "./features/export/ComparisonManager";
@@ -88,7 +83,6 @@ export function ResearchDatabaseApp(props: Props) {
   const [sortBy, setSortBy] = useState("title");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [activeViewID, setActiveViewID] = useState(`builtin-${props.mode}`);
-  const [columnDialog, setColumnDialog] = useState<string>();
   const [agentDialog, setAgentDialog] = useState(false);
   const [agentDialogTab, setAgentDialogTab] = useState<"mineru" | "pdf">(
     "mineru",
@@ -399,22 +393,6 @@ export function ResearchDatabaseApp(props: Props) {
     [props.repository],
   );
 
-  const toggleLock = useCallback(
-    async (item: Zotero.Item, field: FieldDefinition) => {
-      if (!workspace) return;
-      const current = records.get(item.key);
-      if (!current?.fields[field.id]) return;
-      const next = setFieldLock(
-        current,
-        field.id,
-        !current.fields[field.id].locked,
-      );
-      await props.repository.saveRecord(item, next, workspace.fields);
-      setRecords((all) => new Map(all).set(item.key, next));
-    },
-    [props.repository, records, workspace],
-  );
-
   const runExtraction = useCallback(
     async (scope: "selected" | "unprocessed" | "all" | "failed") => {
       if (!workspace || extracting) return;
@@ -450,7 +428,9 @@ export function ResearchDatabaseApp(props: Props) {
         await service.run(targets, workspace, (entry) => {
           setProgress((current) => new Map(current).set(entry.itemKey, entry));
         });
-        await reloadRecords(workspace, false, true);
+        await reloadRecords(workspace, false, false, {
+          records: targets.map((item) => item.key),
+        });
         props.zoteroWindow.setTimeout(() => {
           setProgress(
             (current) =>
@@ -476,6 +456,74 @@ export function ResearchDatabaseApp(props: Props) {
       reloadRecords,
       selected,
       progress,
+      workspace,
+    ],
+  );
+
+  const regenerateField = useCallback(
+    async (item: Zotero.Item, field: FieldDefinition) => {
+      if (!workspace || extracting || !field.extraction.enabled) return;
+      setExtracting(true);
+      setProgress(
+        new Map([
+          [
+            item.key,
+            {
+              itemKey: item.key,
+              fieldIDs: [field.id],
+              state: "running" as const,
+              message: "准备重新生成“" + field.name + "”",
+            },
+          ],
+        ]),
+      );
+      try {
+        const currentAgent = createAgentBridgeFromPrefs();
+        const service = new ExternalAgentExtractionService(
+          props.repository,
+          currentAgent,
+        );
+        extractionRef.current = service;
+        await service.run(
+          [item],
+          workspace,
+          (entry) => {
+            setProgress((current) =>
+              new Map(current).set(entry.itemKey, entry),
+            );
+          },
+          {
+            requestedFieldIDs: [field.id],
+            overwriteLockedFields: true,
+          },
+        );
+        await reloadRecords(workspace, false, false, {
+          records: [item.key],
+        });
+        props.zoteroWindow.setTimeout(() => {
+          setProgress((current) => {
+            const entry = current.get(item.key);
+            if (!entry || entry.state !== "success") return current;
+            const next = new Map(current);
+            next.delete(item.key);
+            return next;
+          });
+        }, 1400);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        props.zoteroWindow.alert(
+          "重新生成“" + field.name + "”失败：" + message,
+        );
+      } finally {
+        setExtracting(false);
+        extractionRef.current = undefined;
+      }
+    },
+    [
+      extracting,
+      props.repository,
+      props.zoteroWindow,
+      reloadRecords,
       workspace,
     ],
   );
@@ -600,15 +648,6 @@ export function ResearchDatabaseApp(props: Props) {
     },
     [currentColumns, layout, patchCurrentView],
   );
-
-  const openFieldSettings = useCallback(() => {
-    setColumnDialog(undefined);
-    void openResearchPreferences("fields").catch((error) =>
-      props.zoteroWindow.alert(
-        `无法打开插件字段设置：${error instanceof Error ? error.message : String(error)}`,
-      ),
-    );
-  }, [props.zoteroWindow]);
 
   const exportTable = useTableExport({
     currentViewName: currentView?.name,
@@ -744,12 +783,6 @@ export function ResearchDatabaseApp(props: Props) {
               }
             >
               <h3>当前视图</h3>
-              <MenuButton
-                icon="columns"
-                label="列布局"
-                detail={`${workspace.fields.filter((field) => !field.archived).length} 个字段`}
-                onClick={() => setColumnDialog("__all")}
-              />
               <details className="zrdb-menu-submenu">
                 <summary>
                   <UIIcon name="lock" />
@@ -1045,50 +1078,17 @@ export function ResearchDatabaseApp(props: Props) {
           layout={layout}
           editing={editing}
           progress={progress}
+          extracting={extracting}
           onLayout={(next) => void patchCurrentView({ layout: next })}
           onSelect={selectItem}
           onBeginEdit={(item, column) => setEditing({ item, column })}
           onSaveCustom={saveManualValue}
           onSaveNative={saveNativeValue}
           onCancelEdit={() => setEditing(undefined)}
-          onToggleLock={toggleLock}
-          onManageColumns={(columnID) => setColumnDialog(columnID)}
+          onRegenerateField={regenerateField}
           onTranslateTitle={translateTitle}
         />
       </div>
-      {columnDialog && (
-        <ColumnManager
-          fields={workspace.fields}
-          initialColumnID={columnDialog === "__all" ? undefined : columnDialog}
-          layout={layout}
-          onSave={(nextLayout) => {
-            const now = new Date().toISOString();
-            const viewID = currentView?.id || builtinViewID;
-            const existing = workspace.views.find((view) => view.id === viewID);
-            const nextView: SavedView = {
-              id: viewID,
-              name: "默认表格",
-              mode: props.mode,
-              createdAt: now,
-              ...existing,
-              layout: nextLayout,
-              filterText,
-              groupBy: groupBy || undefined,
-              sortBy: { fieldID: sortBy, direction: sortDirection },
-              updatedAt: now,
-            };
-            void saveWorkspace({
-              ...workspace,
-              views: [
-                ...workspace.views.filter((view) => view.id !== viewID),
-                nextView,
-              ],
-            });
-          }}
-          onOpenFieldSettings={openFieldSettings}
-          onClose={() => setColumnDialog(undefined)}
-        />
-      )}
       {agentDialog && (
         <AgentBridgeManager
           repository={props.repository}

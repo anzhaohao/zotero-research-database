@@ -150,7 +150,7 @@
     <html:div class="zrdb-pref-section">
       <html:h3>字段定义</html:h3>
       <html:p
-        >在此管理自定义字段、说明和提取提示词；语言与输出格式直接写入提示词。归档字段保留历史值，可以恢复。列的显示、顺序和固定位置在表格的“当前视图列布局”中调整。</html:p
+        >在此管理自定义字段、说明和提取提示词；语言与输出格式直接写入提示词。归档字段保留历史值，可以恢复。可直接拖动表格表头调整列顺序，固定位置在表格菜单的“固定列”中设置。</html:p
       >
       <html:div id="zrdb-fields-list" class="zrdb-pref-fields"></html:div>
       <html:div class="zrdb-pref-inline-actions">
@@ -215,7 +215,8 @@
     <html:div class="zrdb-pref-section">
       <html:h3>论文处理助手</html:h3>
       <html:p class="zrdb-pref-intro"
-        >选择一个本机助手，用于提取研究字段、翻译标题和生成论文比较结论。普通使用只需要选择助手并检查状态；程序路径、参数和协议细节收在高级设置中。</html:p
+        >选择一个本机助手或 OpenAI 兼容
+        API，用于提取研究字段、翻译标题和生成论文比较结论。普通使用只需要选择助手并检查状态；程序路径、参数和协议细节收在高级设置中。</html:p
       >
       <html:div
         id="zrdb-agent-status-card"
@@ -235,16 +236,33 @@
         <html:select data-pref="agentKind"
           ><html:option value="codex-cli">Codex CLI（推荐）</html:option
           ><html:option value="claude-code">Claude Code</html:option
-          ><html:option value="hana-agent">HanaAgent（本机服务）</html:option
+          ><html:option value="openai-compatible"
+            >OpenAI 兼容 API（第三方模型）</html:option
           ><html:option value="ollama">Ollama（本机模型）</html:option
           ><html:option value="custom-json-process"
             >自定义程序（高级）</html:option
           ></html:select
         ></html:label
       >
+      <html:label data-agent-kinds="ollama openai-compatible"
+        ><html:span data-agent-endpoint-label="true">本机服务地址</html:span>
+        <html:input
+          type="text"
+          data-pref="agentEndpoint"
+          placeholder="默认自动检测本机服务"
+      /></html:label>
+      <html:label data-agent-kinds="openai-compatible"
+        >API Key
+        <html:input
+          type="password"
+          data-pref="agentApiKey"
+          placeholder="输入服务提供商的 API Key"
+          autocomplete="off"
+          spellcheck="false"
+      /></html:label>
       <html:label
         class="zrdb-agent-model-control"
-        data-agent-kinds="codex-cli claude-code ollama"
+        data-agent-kinds="codex-cli claude-code ollama openai-compatible"
         >模型
         <html:select
           id="zrdb-agent-model-select"
@@ -268,17 +286,10 @@
         <html:button
           type="button"
           id="zrdb-agent-model-refresh"
-          data-agent-kinds="ollama"
-          >刷新本机模型</html:button
+          data-agent-kinds="ollama openai-compatible"
+          >刷新模型列表</html:button
         >
       </html:div>
-      <html:label data-agent-kinds="ollama hana-agent"
-        ><html:span data-agent-endpoint-label="true">本机服务地址</html:span>
-        <html:input
-          type="text"
-          data-pref="agentEndpoint"
-          placeholder="默认自动检测本机服务"
-      /></html:label>
       <html:div class="zrdb-agent-choice-hint">
         <html:p
           ><strong>Codex CLI</strong
@@ -289,14 +300,14 @@
           的用户。</html:p
         >
         <html:p
-          ><strong>HanaAgent</strong>：连接本机 HanaAgent
-          服务，默认自动读取服务信息。</html:p
+          ><strong>OpenAI 兼容 API</strong>：填写服务商提供的 Base URL、API Key
+          和模型 ID；Base URL 通常以 /v1 结尾。</html:p
         >
         <html:p><strong>Ollama</strong>：使用本机模型，适合离线处理。</html:p>
       </html:div>
       <html:p class="zrdb-pref-warning"
-        >插件不会保存云端 API Key，也不会经过 Shell
-        拼接命令。检查助手不会读取论文，也不会写入研究数据。</html:p
+        >API Key 仅保存在本机 Zotero
+        设置，不写入共享数据目录、备份或导出文件。检查助手不会读取论文，也不会写入研究数据。</html:p
       >
       <html:div class="zrdb-pref-callout zrdb-pref-local-interface">
         <html:h4>本地接口</html:h4>
@@ -327,8 +338,7 @@
         <html:p
           >只有在自动检测失败、需要指定程序位置，或接入自定义程序时才需要修改这些选项。</html:p
         >
-        <html:label
-          data-agent-kinds="claude-code hana-agent custom-json-process"
+        <html:label data-agent-kinds="claude-code custom-json-process"
           >程序位置
           <html:input
             type="text"
@@ -394,40 +404,17 @@
       <html:label
         >运行方式
         <html:select data-pref="mineruMode"
-          ><html:option value="local-client">MinerU Desktop（本机）</html:option
-          ><html:option value="official-api">MinerU 网页 API</html:option
-          ><html:option value="self-hosted"
-            >Docker / 本地 API</html:option
+          ><html:option value="self-hosted">Docker / 本地 API</html:option
+          ><html:option value="official-api"
+            >MinerU 网页 API</html:option
           ></html:select
         ></html:label
-      >
-      <html:p class="zrdb-pref-mode-note" data-mineru-modes="local-client"
-        >插件会投递主 PDF，并监听 Desktop 结果目录；解析完成后自动导入 Markdown
-        与图表。</html:p
       >
       <html:p class="zrdb-pref-mode-note" data-mineru-modes="self-hosted"
         >推荐：转换完成后自动导入 Markdown，并把解析清单中的图、表和图片放入
         “论文图表”列（MinerU 4.x 读 structured_content.json，3.x 读
         content_list.json）。</html:p
       >
-      <html:label data-mineru-modes="local-client"
-        >客户端可执行文件
-        <html:input
-          type="text"
-          data-pref="mineruExecutable"
-          placeholder="E:\software\MinerU\MinerU.exe"
-      /></html:label>
-      <html:label data-mineru-modes="local-client"
-        >客户端附加参数（JSON 数组）
-        <html:input type="text" data-pref="mineruArgs" placeholder="[]"
-      /></html:label>
-      <html:label data-mineru-modes="local-client"
-        >Desktop 结果目录（留空自动读取）
-        <html:input
-          type="text"
-          data-pref="mineruDesktopOutputDirectory"
-          placeholder="%USERPROFILE%\MinerU"
-      /></html:label>
       <html:label data-mineru-modes="official-api"
         >网页 API 地址
         <html:input
@@ -436,8 +423,20 @@
           placeholder="暂留空；使用时填写官方 HTTPS 地址"
       /></html:label>
       <html:label data-mineru-modes="official-api"
-        >Token 环境变量
-        <html:input type="text" data-pref="mineruOfficialTokenEnvironment"
+        >API Token
+        <html:input
+          type="password"
+          data-pref="mineruOfficialToken"
+          placeholder="粘贴 MinerU 网页 API Token"
+          autocomplete="off"
+          spellcheck="false"
+      /></html:label>
+      <html:label data-mineru-modes="official-api"
+        >Token 环境变量（可选，API Token 留空时使用）
+        <html:input
+          type="text"
+          data-pref="mineruOfficialTokenEnvironment"
+          placeholder="MINERU_API_TOKEN"
       /></html:label>
       <html:label data-mineru-modes="self-hosted"
         >本地部署地址
@@ -479,8 +478,8 @@
           ></html:select
         ></html:label
       >
-      <html:label data-mineru-modes="local-client self-hosted"
-        >本地后端（MinerU 3.x 服务与 Desktop 客户端使用）<html:input
+      <html:label data-mineru-modes="self-hosted"
+        >本地后端（MinerU 3.x 服务使用）<html:input
           type="text"
           data-pref="mineruBackend"
       /></html:label>
@@ -510,6 +509,17 @@
         ><html:input type="checkbox" data-pref="mineruEnableTable" />
         识别表格</html:label
       >
+      <html:label
+        >共享 MinerU 产物目录
+        <html:input
+          type="text"
+          data-pref="mineruSharedStoreDirectory"
+          placeholder="E:\software\Zotero\mineru-shared-store"
+      /></html:label>
+      <html:p class="zrdb-pref-mode-note"
+        >Research Database 与 Bilingual Reader 按 PDF SHA-256
+        共用此目录。默认复用已有产物；需要更新时，在转换对话框勾选“重新解析并生成新产物”。</html:p
+      >
       <html:div class="zrdb-pref-callout"
         ><html:h4>复用 llm-for-zotero</html:h4
         ><html:label
@@ -530,8 +540,8 @@
         <html:input type="number" min="10000" data-pref="mineruTimeoutMs"
       /></html:label>
       <html:p class="zrdb-pref-warning"
-        >网页 API Token 只从指定环境变量读取，不写入 Zotero
-        偏好或同步数据。转换时优先使用条目显式设置的主
+        >API Token 仅保存在本机 Zotero
+        设置，不写入共享数据目录、备份或导出文件；留空时才从指定环境变量读取。转换时优先使用条目显式设置的主
         PDF；未设置时自动选择标题为“PDF”的附件。</html:p
       >
       <html:button type="button" id="zrdb-mineru-test">连接测试</html:button>
