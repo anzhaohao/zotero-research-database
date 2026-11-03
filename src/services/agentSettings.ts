@@ -1,9 +1,11 @@
 import { getPref, setPref } from "../utils/prefs";
 import {
   createAgentBridge,
+  AGENT_REASONING_EFFORTS,
   type AgentAdapterKind,
   type AgentBridge,
   type AgentProfile,
+  type AgentReasoningEffort,
 } from "./externalAgent";
 
 const supportedKinds = new Set<AgentAdapterKind>([
@@ -36,6 +38,7 @@ export const AGENT_MODEL_PRESETS: Partial<
   ],
   "claude-code": [
     { value: "", label: "自动选择（由 Claude 决定）" },
+    { value: "fable", label: "Claude Fable 5" },
     { value: "claude-opus-4-1", label: "Claude Opus 4.1" },
     { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
     { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
@@ -58,6 +61,7 @@ export interface AgentSettingsInput {
   endpoint: unknown;
   apiKey?: unknown;
   model: unknown;
+  reasoningEffort?: unknown;
   timeoutMs: unknown;
 }
 
@@ -96,6 +100,12 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
   const rawExecutable = String(input.executable || "").trim();
   const rawEndpoint = String(input.endpoint || "").trim();
   const apiKey = String(input.apiKey || "").trim();
+  const rawReasoningEffort = String(input.reasoningEffort || "").trim();
+  const reasoningEffort = (
+    AGENT_REASONING_EFFORTS as readonly string[]
+  ).includes(rawReasoningEffort)
+    ? (rawReasoningEffort as AgentReasoningEffort)
+    : undefined;
   return {
     kind,
     executable:
@@ -106,6 +116,7 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
     endpoint: rawEndpoint || undefined,
     ...(apiKey ? { apiKey } : {}),
     model: String(input.model || "").trim() || undefined,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     timeoutMs:
       Number.isFinite(timeoutMs) && timeoutMs >= 1000 ? timeoutMs : 900_000,
   };
@@ -119,6 +130,7 @@ export function readAgentProfile(): AgentProfile {
     endpoint: getPref("agentEndpoint"),
     apiKey: getPref("agentApiKey"),
     model: getPref("agentModel"),
+    reasoningEffort: getPref("agentReasoningEffort"),
     timeoutMs: getPref("agentTimeoutMs"),
   });
 }
@@ -149,5 +161,6 @@ export function saveAgentProfile(profile: AgentProfile): void {
   setPref("agentEndpoint", profile.endpoint || "");
   setPref("agentApiKey", profile.apiKey || "");
   setPref("agentModel", profile.model || "");
+  setPref("agentReasoningEffort", profile.reasoningEffort || "");
   setPref("agentTimeoutMs", profile.timeoutMs);
 }

@@ -59,6 +59,7 @@ export const EXPORTED_PREF_KEYS = [
   "agentArgs",
   "agentEndpoint",
   "agentModel",
+  "agentReasoningEffort",
   "agentTimeoutMs",
   "agentSettingsVersion",
   "mineruMode",

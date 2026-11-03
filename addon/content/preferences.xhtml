@@ -291,6 +291,17 @@
           placeholder="输入模型 ID"
           hidden="true"
       /></html:label>
+      <html:label data-agent-kinds="codex-cli claude-code"
+        >思考强度
+        <html:select data-pref="agentReasoningEffort">
+          <html:option value="">默认</html:option>
+          <html:option value="low">低（low）</html:option>
+          <html:option value="medium">中（medium）</html:option>
+          <html:option value="high">高（high）</html:option>
+          <html:option value="xhigh">很高（xhigh）</html:option>
+          <html:option value="max">最高（max）</html:option>
+        </html:select>
+      </html:label>
       <html:p id="zrdb-agent-model-help" class="zrdb-pref-help"
         >从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。</html:p
       >

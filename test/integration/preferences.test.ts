@@ -232,6 +232,7 @@ describe("preferences persistence in the real Zotero settings window", function 
       defaultRowHeight: 216,
       agentApiKey: "ZRDB preferences local API key",
       agentModel: "ZRDB preferences 测试 model",
+      agentReasoningEffort: "high",
       mineruOfficialToken: "ZRDB preferences saved MinerU token",
       mineruEnableFormula: false,
       mineruEnableTable: true,
@@ -354,9 +355,34 @@ describe("preferences persistence in the real Zotero settings window", function 
           "selecting a model updates the persisted control",
         );
       }
+      stage = "switch assistants and reload their model choices";
+      agentKind.value = "claude-code";
+      agentKind.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      assert.strictEqual(
+        (control(win!, "agentModel") as HTMLInputElement).value,
+        "",
+        "switching assistants clears the previous model immediately",
+      );
+      assert.exists(
+        modelSelect?.querySelector('option[value="fable"]'),
+        "Claude Code exposes the fable alias",
+      );
+      assert.notExists(
+        modelSelect?.querySelector('option[value="ds"]'),
+        "a model from another assistant cannot leak into Claude Code",
+      );
+      if (modelSelect) {
+        modelSelect.value = "fable";
+        modelSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+        assert.strictEqual(
+          (control(win!, "agentModel") as HTMLInputElement).value,
+          "fable",
+        );
+      }
       stage = "change string value";
       setValue("agentApiKey", String(expected.agentApiKey));
       setValue("agentModel", String(expected.agentModel));
+      setValue("agentReasoningEffort", String(expected.agentReasoningEffort));
       await open("mineru");
       stage = "verify MinerU token control";
       assert.strictEqual(

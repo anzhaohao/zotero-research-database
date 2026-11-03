@@ -35,6 +35,7 @@ declare namespace _ZoteroTypes {
       "agentEndpoint": string;
       "agentApiKey": string;
       "agentModel": string;
+      "agentReasoningEffort": string;
       "agentTimeoutMs": number;
       "agentSettingsVersion": number;
       "mineruMode": string;

@@ -49,6 +49,7 @@ import {
   rotateArtifactImportToken,
 } from "../services/artifactEndpoint";
 import { copyPlainText } from "../services/clipboard";
+import { showAgentError } from "./agentError";
 
 const prefKeys = [
   "defaultRowHeight",
@@ -74,6 +75,7 @@ const prefKeys = [
   "agentEndpoint",
   "agentApiKey",
   "agentModel",
+  "agentReasoningEffort",
   "agentTimeoutMs",
   "mineruMode",
   "mineruSharedStoreDirectory",
@@ -483,7 +485,7 @@ export class PreferencesController {
               : "http://127.0.0.1:11434";
       }
       this.updateModeVisibility();
-      void this.refreshAgentModelOptions();
+      void this.refreshAgentModelOptions(true);
     });
     this.root
       ?.querySelector('[data-pref="mineruMode"]')
@@ -529,7 +531,7 @@ export class PreferencesController {
     void this.refreshAgentModelOptions();
   }
 
-  private async refreshAgentModelOptions(): Promise<void> {
+  private async refreshAgentModelOptions(resetModel = false): Promise<void> {
     if (!this.root) return;
     const input = this.root.querySelector<HTMLInputElement>(
       "#zrdb-agent-model-custom",
@@ -542,15 +544,63 @@ export class PreferencesController {
       inputValue(this.root, "agentKind"),
     ) as AgentProfile["kind"];
     const requestId = ++this.agentModelRequestId;
+    if (resetModel) input.value = "";
     const presets = [...getAgentModelPresets(kind)];
     let options = presets;
     let codexHint = "";
     let modelLoadHint = "";
+    const renderOptions = () => {
+      if (!this.root) return;
+      const current = input.value.trim();
+      const isKnown = options.some((option) => option.value === current);
+      const customOption = { value: "__custom__", label: "自定义模型…" };
+      const visibleOptions = [...options, customOption];
+      if (current && !isKnown)
+        visibleOptions.splice(visibleOptions.length - 1, 0, {
+          value: current,
+          label: `${current}（当前值）`,
+        });
+      select.replaceChildren(
+        ...visibleOptions.map((option) => {
+          const element = this.win.document.createElement("option");
+          element.value = option.value;
+          element.label = option.label;
+          element.textContent = option.label;
+          return element;
+        }),
+      );
+      if (current && isKnown) select.value = current;
+      else if (current) select.value = "__custom__";
+      else if (kind === "ollama" || kind === "openai-compatible")
+        select.value = "__custom__";
+      else select.value = options[0]?.value || "";
+      input.hidden = select.value !== "__custom__";
+      const help = this.root.querySelector<HTMLElement>(
+        "#zrdb-agent-model-help",
+      );
+      if (help)
+        help.textContent =
+          codexHint ||
+          modelLoadHint ||
+          (kind === "openai-compatible"
+            ? "点击“刷新模型列表”读取服务可用模型，也可以手动填写模型 ID。"
+            : "") ||
+          (kind === "ollama"
+            ? "可从本机 Ollama 读取模型；未启动服务时也可以手动填写。"
+            : "从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。");
+    };
+    // Replace the previous assistant's choices before any asynchronous probe.
+    renderOptions();
     if (kind === "codex-cli") {
       const catalog = await readLocalCodexModelCatalog().catch(() => ({
         models: [],
         defaultModel: undefined,
       }));
+      if (
+        requestId !== this.agentModelRequestId ||
+        String(inputValue(this.root, "agentKind")) !== kind
+      )
+        return;
       const catalogOptions = catalog.models.map((model) => ({
         value: model.value,
         label:
@@ -604,42 +654,12 @@ export class PreferencesController {
         modelLoadHint = `模型列表读取失败：${error instanceof Error ? error.message : String(error)}；可选择“自定义模型”手动填写。`;
       }
     }
-    if (requestId !== this.agentModelRequestId) return;
-    const current = input.value.trim();
-    const isKnown = options.some((option) => option.value === current);
-    const customOption = { value: "__custom__", label: "自定义模型…" };
-    const visibleOptions = [...options, customOption];
-    if (current && !isKnown)
-      visibleOptions.splice(visibleOptions.length - 1, 0, {
-        value: current,
-        label: `${current}（当前值）`,
-      });
-    select.replaceChildren(
-      ...visibleOptions.map((option) => {
-        const element = this.win.document.createElement("option");
-        element.value = option.value;
-        element.label = option.label;
-        element.textContent = option.label;
-        return element;
-      }),
-    );
-    if (current && isKnown) select.value = current;
-    else if (current) select.value = "__custom__";
-    else if (kind === "ollama" || kind === "openai-compatible")
-      select.value = "__custom__";
-    else select.value = options[0]?.value || "";
-    input.hidden = select.value !== "__custom__";
-    const help = this.root.querySelector<HTMLElement>("#zrdb-agent-model-help");
-    if (help)
-      help.textContent =
-        codexHint ||
-        modelLoadHint ||
-        (kind === "openai-compatible"
-          ? "点击“刷新模型列表”读取服务可用模型，也可以手动填写模型 ID。"
-          : "") ||
-        (kind === "ollama"
-          ? "可从本机 Ollama 读取模型；未启动服务时也可以手动填写。"
-          : "从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。");
+    if (
+      requestId !== this.agentModelRequestId ||
+      String(inputValue(this.root, "agentKind")) !== kind
+    )
+      return;
+    renderOptions();
   }
 
   private updateModeVisibility(): void {
@@ -714,8 +734,10 @@ export class PreferencesController {
     if (card) card.className = "zrdb-agent-status-card is-checking";
     if (label)
       label.textContent = structured ? "正在检查输出…" : "正在检查助手…";
+    let profile: AgentProfile | undefined;
     try {
-      const agent = createAgentBridge(this.profileFromControls());
+      profile = this.profileFromControls();
+      const agent = createAgentBridge(profile);
       let result: { executable: string; version: string } | undefined;
       if (structured) {
         await agent.testStructuredOutput();
@@ -739,6 +761,7 @@ export class PreferencesController {
           ? message
           : `${message}；请检查高级设置或启动本机服务`,
       );
+      showAgentError(this.win, "Agent 检查失败", error, profile);
     } finally {
       this.agentTesting = false;
       for (const button of buttons) {
@@ -757,6 +780,7 @@ export class PreferencesController {
       endpoint: inputValue(this.root, "agentEndpoint"),
       apiKey: inputValue(this.root, "agentApiKey"),
       model: inputValue(this.root, "agentModel"),
+      reasoningEffort: inputValue(this.root, "agentReasoningEffort"),
       timeoutMs: inputValue(this.root, "agentTimeoutMs"),
     });
   }

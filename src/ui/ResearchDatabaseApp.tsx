@@ -39,7 +39,11 @@ import {
   translateTitleWithFallback,
   translateTitleWithPDFTranslate,
 } from "../services/titleTranslation";
-import { createAgentBridgeFromPrefs } from "../services/agentSettings";
+import { readAgentProfile } from "../services/agentSettings";
+import {
+  createAgentBridge,
+  type AgentProfile,
+} from "../services/externalAgent";
 import { openZoteroFigureParserUI } from "../services/zoteroFigure";
 import { getPref } from "../utils/prefs";
 import { type EditingCell } from "./features/table/tableTypes";
@@ -67,6 +71,7 @@ import { ComparisonManager } from "./features/export/ComparisonManager";
 import { SavedManager } from "./features/export/SavedManager";
 import { resolveSavedItems } from "./features/export/savedItems";
 import { openResearchPreferences } from "./preferencesNavigation";
+import { showAgentError } from "./agentError";
 
 export type DatabaseViewMode = "table";
 
@@ -417,7 +422,7 @@ export function ResearchDatabaseApp(props: Props) {
         targets = filteredItems.filter((item) =>
           workspace.fields.some(
             (field) =>
-              field.extraction.enabled &&
+              !field.archived &&
               !displayValue(records.get(item.key)?.fields[field.id]?.value),
           ),
         );
@@ -432,19 +437,31 @@ export function ResearchDatabaseApp(props: Props) {
       }
       setExtracting(true);
       setProgress(new Map());
-      const currentAgent = createAgentBridgeFromPrefs();
-      const service = new ExternalAgentExtractionService(
-        props.repository,
-        currentAgent,
-      );
-      extractionRef.current = service;
+      const failures = new Map<string, string>();
+      let profile: AgentProfile | undefined;
       try {
+        profile = readAgentProfile();
+        const currentAgent = createAgentBridge(profile);
+        const service = new ExternalAgentExtractionService(
+          props.repository,
+          currentAgent,
+        );
+        extractionRef.current = service;
         await service.run(targets, workspace, (entry) => {
+          if (entry.state === "failed")
+            failures.set(entry.itemKey, entry.message);
+          else failures.delete(entry.itemKey);
           setProgress((current) => new Map(current).set(entry.itemKey, entry));
         });
         await reloadRecords(workspace, false, false, {
           records: targets.map((item) => item.key),
         });
+        if (failures.size)
+          throw new Error(
+            [...failures]
+              .map(([itemKey, message]) => itemKey + "：" + message)
+              .join("\n"),
+          );
         props.zoteroWindow.setTimeout(() => {
           setProgress(
             (current) =>
@@ -454,8 +471,7 @@ export function ResearchDatabaseApp(props: Props) {
           );
         }, 1400);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        props.zoteroWindow.alert(`提取任务失败：${message}`);
+        showAgentError(props.zoteroWindow, "提取任务失败", error, profile);
       } finally {
         setExtracting(false);
         extractionRef.current = undefined;
@@ -476,7 +492,8 @@ export function ResearchDatabaseApp(props: Props) {
 
   const regenerateField = useCallback(
     async (item: Zotero.Item, field: FieldDefinition) => {
-      if (!workspace || extracting || !field.extraction.enabled) return;
+      if (!workspace || extracting || field.archived) return;
+      let profile: AgentProfile | undefined;
       setExtracting(true);
       setProgress(
         new Map([
@@ -492,16 +509,20 @@ export function ResearchDatabaseApp(props: Props) {
         ]),
       );
       try {
-        const currentAgent = createAgentBridgeFromPrefs();
+        profile = readAgentProfile();
+        const currentAgent = createAgentBridge(profile);
         const service = new ExternalAgentExtractionService(
           props.repository,
           currentAgent,
         );
         extractionRef.current = service;
+        let failure: ExtractionProgress | undefined;
         await service.run(
           [item],
           workspace,
           (entry) => {
+            if (entry.state === "failed") failure = entry;
+            else failure = undefined;
             setProgress((current) =>
               new Map(current).set(entry.itemKey, entry),
             );
@@ -514,6 +535,7 @@ export function ResearchDatabaseApp(props: Props) {
         await reloadRecords(workspace, false, false, {
           records: [item.key],
         });
+        if (failure) throw new Error(failure.message);
         props.zoteroWindow.setTimeout(() => {
           setProgress((current) => {
             const entry = current.get(item.key);
@@ -524,9 +546,11 @@ export function ResearchDatabaseApp(props: Props) {
           });
         }, 1400);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        props.zoteroWindow.alert(
-          "重新生成“" + field.name + "”失败：" + message,
+        showAgentError(
+          props.zoteroWindow,
+          "重新生成“" + field.name + "”失败",
+          error,
+          profile,
         );
       } finally {
         setExtracting(false);
@@ -553,6 +577,8 @@ export function ResearchDatabaseApp(props: Props) {
         (field) => field.id === TRANSLATED_TITLE_FIELD_ID,
       );
       if (!titleField) throw new Error("研究数据库缺少中文标题字段");
+      let profile: AgentProfile | undefined;
+      let agentAttempted = false;
       setExtracting(true);
       setProgress(new Map());
       try {
@@ -571,7 +597,9 @@ export function ResearchDatabaseApp(props: Props) {
             },
           }),
           translateFallback: async () => {
-            const currentAgent = createAgentBridgeFromPrefs();
+            agentAttempted = true;
+            profile = readAgentProfile();
+            const currentAgent = createAgentBridge(profile);
             extractionRef.current = currentAgent;
             setProgress(
               new Map([
@@ -629,11 +657,18 @@ export function ResearchDatabaseApp(props: Props) {
           ]),
         );
         Zotero.logError(error instanceof Error ? error : new Error(detail));
+        if (agentAttempted)
+          showAgentError(
+            props.zoteroWindow,
+            "Agent 标题翻译失败",
+            error,
+            profile,
+          );
       } finally {
         setExtracting(false);
       }
     },
-    [extracting, props.repository, records, workspace],
+    [extracting, props.repository, props.zoteroWindow, records, workspace],
   );
 
   const currentColumns = useColumns(workspace?.fields || [], layout);
@@ -1130,7 +1165,8 @@ export function ResearchDatabaseApp(props: Props) {
           records={records}
           workspace={workspace}
           repository={props.repository}
-          createAgent={createAgentBridgeFromPrefs}
+          zoteroWindow={props.zoteroWindow}
+          createAgent={createAgentBridge}
           definition={workspace.comparisons.find(
             (entry) => entry.id === comparisonDefinitionID,
           )}

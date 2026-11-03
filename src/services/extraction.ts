@@ -116,7 +116,7 @@ export class ExternalAgentExtractionService {
           fieldIDs,
           state: "running",
           message: `正在调用外部 Agent（${
-            source.pdfPath ? "主 PDF，失败回退文本" : sourceLabel(source.type)
+            source.pdfPath ? "主 PDF + 全文" : sourceLabel(source.type)
           }，${inputLengthLabel(prepared)}）`,
         });
         const staged = await stageAgentDocument(
@@ -128,21 +128,6 @@ export class ExternalAgentExtractionService {
         try {
           this.throwIfCancelled();
           result = await this.agent.extractFields(fields, staged.input);
-        } catch (directError) {
-          this.throwIfCancelled();
-          if (!source.text.trim() || !staged.input.pdfPath) throw directError;
-          onProgress({
-            itemKey: item.key,
-            fieldIDs,
-            state: "running",
-            message: "Agent 直读主 PDF 失败，正在回退到 Zotero 文本",
-          });
-          this.throwIfCancelled();
-          result = await this.agent.extractFields(fields, {
-            text: prepared.text,
-            images: staged.input.images,
-            sourceType: source.type,
-          });
         } finally {
           await staged.cleanup();
         }

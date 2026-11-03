@@ -78,8 +78,29 @@ describe("external Agent settings", function () {
     ).to.include.members(["", "gpt-5.6-sol"]);
     expect(
       getAgentModelPresets("claude-code").map((option) => option.value),
-    ).to.include("claude-sonnet-4-5");
+    ).to.include.members(["fable", "claude-sonnet-4-5"]);
+    expect(
+      getAgentModelPresets("claude-code").map((option) => option.value),
+    ).not.to.include("ds");
     expect(getAgentModelPresets("openai-compatible")).to.deep.equal([]);
     expect(getAgentModelPresets("ollama")).to.deep.equal([]);
+  });
+
+  it("persists a supported reasoning effort and ignores invalid values", function () {
+    const common = {
+      kind: "claude-code",
+      executable: "claude",
+      args: "[]",
+      endpoint: "",
+      model: "fable",
+      timeoutMs: 30000,
+    };
+    expect(
+      parseAgentProfile({ ...common, reasoningEffort: "high" }).reasoningEffort,
+    ).to.equal("high");
+    expect(
+      parseAgentProfile({ ...common, reasoningEffort: "ultra" })
+        .reasoningEffort,
+    ).to.equal(undefined);
   });
 });

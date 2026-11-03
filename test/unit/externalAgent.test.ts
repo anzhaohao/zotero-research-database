@@ -4,6 +4,7 @@ import {
   buildExtractionJSONSchema,
   buildExtractionPrompt,
   buildCodexWorkerArguments,
+  buildClaudeCodeWorkerArguments,
   CODEX_WORKER_FLAGS,
   ConfiguredAgentBridge,
   extractCodexFailureDetail,
@@ -44,6 +45,32 @@ describe("external Codex bridge", function () {
     expect(args).to.include.members(["--model", "qwen3.8-27b"]);
     expect(args).to.include.members(["--add-dir", "C:\\Papers"]);
     expect(CODEX_WORKER_FLAGS).to.include("--disable");
+    expect(args).to.include('model_reasoning_effort="low"');
+  });
+
+  it("passes the selected reasoning effort to Codex and Claude Code", function () {
+    const codexArgs = buildCodexWorkerArguments(
+      "gpt-5.6-sol",
+      "schema.json",
+      "result.json",
+      "worker",
+      undefined,
+      "high",
+    );
+    expect(codexArgs).to.include('model_reasoning_effort="high"');
+    const claudeArgs = buildClaudeCodeWorkerArguments(
+      { model: "fable", reasoningEffort: "xhigh" },
+      { type: "object" },
+      "C:\\Papers",
+    );
+    expect(claudeArgs).to.include.members([
+      "--model",
+      "fable",
+      "--effort",
+      "xhigh",
+      "--add-dir",
+      "C:\\Papers",
+    ]);
   });
 
   it("treats malformed optional skills as startup noise, not as the failure", function () {

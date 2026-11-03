@@ -54,6 +54,7 @@ export function buildCodexWorkerArguments(
   outputPath: string,
   workdir: string,
   documentDirectory?: string,
+  reasoningEffort?: AgentReasoningEffort,
 ): string[] {
   const modelArguments = model ? ["--model", model] : [];
   return [
@@ -61,7 +62,7 @@ export function buildCodexWorkerArguments(
     ...CODEX_WORKER_FLAGS,
     ...modelArguments,
     "--config",
-    'model_reasoning_effort="low"',
+    `model_reasoning_effort="${reasoningEffort || "low"}"`,
     "--config",
     "notify=[]",
     "--sandbox",
@@ -227,6 +228,16 @@ export type AgentAdapterKind =
   | "openai-compatible"
   | "custom-json-process";
 
+export const AGENT_REASONING_EFFORTS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type AgentReasoningEffort = (typeof AGENT_REASONING_EFFORTS)[number];
+
 export interface AgentProfile {
   kind: AgentAdapterKind;
   executable?: string;
@@ -234,6 +245,7 @@ export interface AgentProfile {
   endpoint?: string;
   apiKey?: string;
   model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   timeoutMs: number;
 }
 
@@ -267,7 +279,10 @@ export class CodexAgentBridge implements AgentBridge {
   private version?: string;
 
   constructor(
-    private profile: Pick<AgentProfile, "model" | "timeoutMs"> = {
+    private profile: Pick<
+      AgentProfile,
+      "model" | "reasoningEffort" | "timeoutMs"
+    > = {
       timeoutMs: DEFAULT_TIMEOUT_MS,
     },
   ) {}
@@ -412,6 +427,7 @@ export class CodexAgentBridge implements AgentBridge {
           outputPath,
           directory,
           documentDirectory,
+          this.profile.reasoningEffort,
         ),
         // Keep authentication/provider routing available while preventing the
         // worker from traversing the real ~/.codex/skills junctions.
@@ -592,6 +608,28 @@ abstract class StructuredPromptAgentBridge implements AgentBridge {
 }
 
 /** Claude Code print-mode bridge. The paper prompt is supplied via stdin. */
+export function buildClaudeCodeWorkerArguments(
+  profile: Pick<AgentProfile, "model" | "reasoningEffort">,
+  schema: Record<string, unknown>,
+  documentDirectory?: string,
+): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    JSON.stringify(schema),
+    "--allowed-tools",
+    "Read,Glob,Grep",
+    "--permission-mode",
+    "plan",
+    ...(documentDirectory ? ["--add-dir", documentDirectory] : []),
+    "--no-session-persistence",
+    ...(profile.model ? ["--model", profile.model] : []),
+    ...(profile.reasoningEffort ? ["--effort", profile.reasoningEffort] : []),
+  ];
+}
+
 export class ClaudeCodeAgentBridge extends StructuredPromptAgentBridge {
   readonly kind = "claude-code" as const;
   private running?: ProcessHandle;
@@ -642,22 +680,11 @@ export class ClaudeCodeAgentBridge extends StructuredPromptAgentBridge {
     );
     const process = await getSubprocess().call({
       command: executable,
-      arguments: [
-        "-p",
-        "--output-format",
-        "json",
-        "--json-schema",
-        JSON.stringify(schema),
-        "--allowed-tools",
-        "Read,Glob,Grep",
-        "--permission-mode",
-        "plan",
-        ...(document?.pdfPath
-          ? ["--add-dir", parentPath(document.pdfPath)]
-          : []),
-        "--no-session-persistence",
-        ...(this.profile.model ? ["--model", this.profile.model] : []),
-      ],
+      arguments: buildClaudeCodeWorkerArguments(
+        this.profile,
+        schema,
+        document?.pdfPath ? parentPath(document.pdfPath) : undefined,
+      ),
       environmentAppend: true,
       stderr: "pipe",
     });

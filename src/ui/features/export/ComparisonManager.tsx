@@ -11,15 +11,21 @@ import {
   synthesizeComparison,
 } from "../../../services/comparison";
 import { exportSnapshotAttachments } from "../../../services/snapshotExport";
-import { type AgentBridge } from "../../../services/externalAgent";
+import {
+  type AgentBridge,
+  type AgentProfile,
+} from "../../../services/externalAgent";
+import { readAgentProfile } from "../../../services/agentSettings";
 import { Modal } from "../shared/ui";
 import { displayValue } from "../shared/display";
+import { showAgentError } from "../../agentError";
 
 export function ComparisonManager({
   items,
   records,
   workspace,
   repository,
+  zoteroWindow,
   createAgent,
   definition,
   onSave,
@@ -29,7 +35,8 @@ export function ComparisonManager({
   records: Map<string, ItemResearchRecord>;
   workspace: WorkspaceState;
   repository: ResearchRepository;
-  createAgent: () => AgentBridge;
+  zoteroWindow: _ZoteroTypes.MainWindow;
+  createAgent: (profile: AgentProfile) => AgentBridge;
   definition?: ComparisonDefinition;
   onSave: (workspace: WorkspaceState) => Promise<void>;
   onClose: () => void;
@@ -119,13 +126,15 @@ export function ComparisonManager({
         <button
           onClick={() =>
             void (async () => {
+              let profile: AgentProfile | undefined;
               try {
+                profile = readAgentProfile();
                 setStatus("正在调用 Agent 生成综合结论……");
                 setSynthesis(
                   await synthesizeComparison(
                     snapshot,
                     workspace.fields,
-                    createAgent(),
+                    createAgent(profile),
                     synthesisPrompt,
                   ),
                 );
@@ -133,6 +142,12 @@ export function ComparisonManager({
               } catch (error) {
                 setStatus(
                   error instanceof Error ? error.message : String(error),
+                );
+                showAgentError(
+                  zoteroWindow,
+                  "Agent 论文比较失败",
+                  error,
+                  profile,
                 );
               }
             })()

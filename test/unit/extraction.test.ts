@@ -259,6 +259,70 @@ describe("external Agent extraction", function () {
     expect(saved.fields["research-outcomes"].value).to.equal("Agent 新结果");
   });
 
+  it("does not repeat a completed Agent request after a PDF extraction failure", async function () {
+    const workspace = createDefaultWorkspace();
+    const record = createEmptyRecord(1, "ITEMPDF1");
+    const repository = {
+      loadRecord: async () => record,
+      saveRecord: async () => undefined,
+    } as unknown as ResearchRepository;
+    const previousPathUtils = (globalThis as any).PathUtils;
+    const previousIOUtils = (globalThis as any).IOUtils;
+    (globalThis as any).PathUtils = {
+      tempDir: "C:\\Temp",
+      join: (...parts: string[]) => parts.join("\\"),
+      filename: (path: string) => path.split("\\").at(-1),
+    };
+    (globalThis as any).IOUtils = {
+      makeDirectory: async () => undefined,
+      read: async () => new Uint8Array([1]),
+      write: async () => undefined,
+      remove: async () => undefined,
+    };
+    let calls = 0;
+    const agent = {
+      kind: "codex-cli",
+      cancel() {},
+      probe: async () => ({ executable: "codex", version: "test" }),
+      testStructuredOutput: async () => undefined,
+      extractFields: async () => {
+        calls += 1;
+        throw new Error("模型返回了无效 JSON");
+      },
+      synthesizeComparison: async () => ({ value: "", executorVersion: "" }),
+    } satisfies AgentBridge;
+    const events: ExtractionProgress[] = [];
+    const service = new ExternalAgentExtractionService(
+      repository,
+      agent,
+      async () => ({
+        type: "pdf-fulltext",
+        text: "paper text",
+        hash: "hash",
+        attachmentID: 2,
+        pdfPath: "C:\\papers\\primary.pdf",
+      }),
+    );
+
+    try {
+      await service.run(
+        [{ key: "ITEMPDF1" } as Zotero.Item],
+        workspace,
+        (event) => events.push(event),
+      );
+    } finally {
+      (globalThis as any).PathUtils = previousPathUtils;
+      (globalThis as any).IOUtils = previousIOUtils;
+    }
+
+    expect(calls).to.equal(1);
+    expect(events.at(-1)?.state).to.equal("failed");
+    expect(events.at(-1)?.message).to.include("模型返回了无效 JSON");
+    expect(
+      events.some((event) => event.message.includes("回退到 Zotero 文本")),
+    ).to.equal(false);
+  });
+
   it("regenerates only the requested cell and overwrites its manual value", async function () {
     const workspace = createDefaultWorkspace();
     workspace.fields.find(

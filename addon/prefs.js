@@ -26,6 +26,7 @@ pref("agentArgs", "");
 pref("agentEndpoint", "http://127.0.0.1:11434");
 pref("agentApiKey", "");
 pref("agentModel", "");
+pref("agentReasoningEffort", "");
 pref("agentTimeoutMs", 900000);
 pref("agentSettingsVersion", 0);
 pref("mineruMode", "self-hosted");
