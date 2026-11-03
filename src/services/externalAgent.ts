@@ -1520,7 +1520,8 @@ export function buildExtractionPrompt(
     "不得读取其它文件或给定路径之外的文件，也不得补充论文没有明确提供的事实。",
     "按照 fields 的 id 和类型提取；无法确定时，字符串返回空字符串，多选返回空数组，",
     "数值/勾选字段无法确定时返回空字符串。只返回符合给定 JSON Schema 的对象。",
-    `除 ${TRANSLATED_TITLE_FIELD_ID} 外，longText 研究字段必须严格写成 1.、2.、3. 三个独立段落；每段单独换行、简洁明确，不得挤成一段。`,
+    "各字段严格遵守自己的 instruction，不得用统一编号或段落模板覆盖字段要求。",
+    "引用图片证据时只写原文图号（如 Fig. 2、Fig. 3a）并说明其证据作用；不得输出 Markdown 图片、图片路径、图片链接或 Base64。",
     JSON.stringify(payload),
   ].join("\n");
 }
