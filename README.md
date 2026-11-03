@@ -104,7 +104,7 @@ npm run build
 - `npm run lint:check`、`npx tsc --noEmit` 与 `git diff --check` 通过。
 - `npm run test:unit`：214 项通过，覆盖 MinerU 共享缓存、OpenAI 兼容 Agent、设置持久化、公式渲染、记录更新与有界缓存。
 - Zotero 10.0.7 隔离运行测试：24 项通过，覆盖原生列表/数据库视图切换、MinerU 产物隐藏/恢复、PDF 缩略图、列宽拖动、集合刷新和记录/产物刷新隔离；未配置的外部服务连通测试保持跳过。
-- `0.3.39` 生产 XPI：`release/zotero-research-database.xpi`，`888,176` 字节，SHA-256 `40E396E177DAF34E04FA9D37EEA5E702BACBA9A263F271559D8B4209D1EA975C`。
+- `0.3.39` 生产 XPI：`release/zotero-research-database.xpi`，`899,708` 字节，SHA-256 `7A9C4EB1ED58ECDA4285C8ABEAED2D8F666ADA77A1805767BF4AAF5497D69363`。
 - 尚未做两个已登录配置之间的真实云同步往返；超大集合首次打开和整份 JSON 原子重写仍是后续性能优化重点。
 
 # 安装
