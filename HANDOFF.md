@@ -636,6 +636,33 @@ The 0.3.33 artifact implemented formula rendering and settings/menu consolidatio
 ### 0.3.35 生产包
 
 - XPI：`.scaffold/build/zotero-research-database.xpi`
-- 稳定副本：`.scaffold/releases/zotero-research-database-0.3.35.xpi`
+- 稳定副本：`release/archive/zotero-research-database-0.3.35.xpi`
 - 大小：903194 字节；SHA-256：`A482A48DD35B6928B816A740F03353B64D1A17494EE38271BC83027365D85350`
 - ZIP 清单核对：版本 `0.3.35`，插件 ID `zotero-research-database@anzhaofeng.local`，47 个条目；未安装到正式 Zotero。
+
+## 2026-11-03 构建产物归档规则
+
+- npm run build 的正式构建产物固定输出到 .scaffold/build/zotero-research-database.xpi；安装和验收应使用该路径。
+- 项目根目录旧的 zotero-research-database.xpi 已移入统一归档目录：release/archive/zotero-research-database-0.3.39-20261102-root-copy.xpi。
+- 根目录副本不是构建工具的输出位置；原先位于 release/archive/ 的历史发布包也已迁移到 release/archive/，后续旧 XPI、发布副本和历史包统一放入 release/archive/，避免与当前构建产物混淆。
+- 本次归档文件大小：887719 字节；SHA-256：1B6A2F17ADE2D029B4B6C384B7661C66F8EAFF592C88A1552D9002EF064A2ED2。
+- 当前正式构建文件大小：888415 字节；SHA-256：74EF5CD507D0F583CD3F705588ED6B29368EAE20CC326AAF8BEAB109EA65EA70。
+
+## 2026-11-03 XPI 目录规范修订
+
+- 根目录 release/ 是唯一的 XPI 交付目录。
+- 当前可安装包位于 release/zotero-research-database.xpi。
+- 历史包统一位于 release/archive/；旧的根目录 XPI 和原 release/archive/ 中的历史包均已迁移到这里。
+- .scaffold/build/zotero-research-database.xpi 仍是构建工具的临时产物；npm run build 现在会在类型检查通过后自动同步一份到 release/。
+- 后续安装、验收和交付使用 release/zotero-research-database.xpi；历史版本只从 release/archive/ 查找。
+- 本次当前交付包大小：888415 字节；SHA-256：4B7E24050182276143D0467BB0540809EE2167BF0D2D8607B93539FAD45E5A1F。
+
+## 2026-11-03 MinerU 网页 API 地址修复
+
+- 正式 Profile 中保存的 `mineruOfficialEndpoint` 为完整任务接口 `https://mineru.net/api/v4/extract/task`，插件继续拼接 `/file-urls/batch` 后得到不存在的路由，实际响应为 HTTP 404 和纯文本 `404 page not found`；旧提示误报为“服务没有返回 JSON”。已保存 Token 经真实接口验证有效。
+- 设置版本升级到 6，启动迁移会把官方完整任务、批量上传和批量结果接口地址规范化为 API 根地址；解析和保存本机设置也会规范化，避免错误地址再次写回。
+- 连接测试现在要求官方接口返回有效 JSON，并只把 `-60012 task not found or expire` 视为合成任务探测成功；错误路由的 HTTP 404 不再显示为连接成功。
+- JSON 解析失败会显示真实 HTTP 状态和经过截断、标签清理的响应摘要；401/403 明确提示检查 MinerU API Token。
+- 使用修正后的 `https://mineru.net/api/v4/file-urls/batch` 和已保存 Token 实测：HTTP 200、`code: 0`，成功返回批次 ID 与上传地址。该验证未上传 PDF、未启动解析，也未记录 Token 或签名 URL。
+- 回归：216 项单元测试通过，TypeScript、Prettier、ESLint、生产构建和 `git diff --check` 通过。
+- 当前交付包：`release/zotero-research-database.xpi`；大小：888897 字节；SHA-256：`E6A87DF2AF0BAD19A3A108DEDC7FCD1CEB87FF68737782FBBFA4970E3974D9B0`。安装后重启 Zotero 会执行地址迁移。

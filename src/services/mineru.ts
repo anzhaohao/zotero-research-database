@@ -1,6 +1,9 @@
-import JSZip, { type JSZipObject } from "jszip";
 import { importArtifacts } from "./artifactEndpoint";
 import { readExistingMinerUMarkdown, sha256Text } from "./contentSource";
+import {
+  readMinerUArchiveEntries,
+  type MinerUArchiveEntry,
+} from "./mineruArchive";
 import { resolvePrimaryPdf } from "./primaryPdf";
 import { clearPref, getPref, setPref } from "../utils/prefs";
 import {
@@ -12,7 +15,8 @@ import {
 
 const SUBPROCESS_MODULE = "resource://gre/modules/Subprocess.sys.mjs";
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
-const MINERU_SETTINGS_VERSION = 5;
+const MINERU_SETTINGS_VERSION = 6;
+const DEFAULT_MINERU_OFFICIAL_ENDPOINT = "https://mineru.net/api/v4";
 const DEFAULT_MINERU_TOKEN_ENVIRONMENT = "MINERU_API_TOKEN";
 const MINERU_DOCKER_PROJECT_PATH = "E:\\software\\DockerProject\\MinerU";
 const MINERU_SHARED_STORE_PATH = "E:\\software\\Zotero\\mineru-shared-store";
@@ -98,6 +102,7 @@ export interface MinerUConversionResult {
   markdown: string;
   figures: MinerUParsedFigure[];
   archive?: Uint8Array;
+  archiveEntries?: MinerUArchiveEntry[];
   markdownArchivePath?: string;
 }
 
@@ -132,7 +137,7 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
   const modelVersion =
     String(input.modelVersion) === "pipeline" ? "pipeline" : "vlm";
   const timeout = Number(input.timeoutMs);
-  const officialEndpoint = normalizeEndpoint(
+  const officialEndpoint = normalizeOfficialEndpoint(
     String(input.officialEndpoint || ""),
   );
   if (
@@ -243,9 +248,15 @@ export function migrateMinerUPreferences(): void {
   if (
     String(getPref("mineruMode") || "self-hosted") !== "official-api" &&
     String(getPref("mineruOfficialEndpoint") || "") ===
-      "https://mineru.net/api/v4"
+      DEFAULT_MINERU_OFFICIAL_ENDPOINT
   )
     setPref("mineruOfficialEndpoint", "");
+  if (version < 6) {
+    const endpoint = String(getPref("mineruOfficialEndpoint") || "");
+    const normalized = normalizeOfficialEndpoint(endpoint);
+    if (endpoint && endpoint !== normalized)
+      setPref("mineruOfficialEndpoint", normalized);
+  }
   if (version < 2) {
     if (!String(getPref("mineruSelfHostedProjectDirectory") || "").trim())
       setPref("mineruSelfHostedProjectDirectory", MINERU_DOCKER_PROJECT_PATH);
@@ -522,8 +533,8 @@ export class MinerUConversionService {
       { headers: this.officialHeaders() },
       this.profile.timeoutMs,
     );
-    if ([401, 403].includes(response.status))
-      throw new Error("MinerU Token 无效");
+    // A missing synthetic task proves that the official route and token work.
+    await jsonResponse(response, "测试 MinerU 连接", [-60012]);
     return `MinerU 网页 API（HTTP ${response.status}，认证已通过）`;
   }
 
@@ -775,11 +786,130 @@ export class MinerUConversionService {
   }
 
   /**
-   * MinerU 4.x flow: create upload -> put content -> complete -> parse job -> poll
-   * -> download the result archive. Returns undefined when the endpoint does not
-   * expose the v1 API so the caller can fall back to the 3.x protocol.
+   * MinerU 4.1 task flow: create task -> upload bytes -> poll task -> download
+   * the result archive. Returns undefined when the endpoint does not expose the
+   * task API so the legacy v1 upload/job protocol can be attempted.
    */
-  private async convertWithV1Api(
+  private async convertWithV1TasksApi(
+    bytes: Uint8Array,
+    fileName: string,
+    pdfPath: string,
+    deadline: number,
+  ): Promise<MinerUConversionResult | undefined> {
+    const endpoint = this.profile.selfHostedEndpoint;
+    const created = await fetchWithTimeout(
+      endpoint + "/v1/tasks",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tier: this.profile.tier,
+          ocr_mode: this.profile.method,
+          output_formats: ["default"],
+          files: [
+            {
+              file_name: fileName,
+              bytes: bytes.byteLength,
+              sha256sum: await sha256Bytes(bytes),
+            },
+          ],
+        }),
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if ([404, 405].includes(created.status)) return undefined;
+    if (!created.ok)
+      throw new Error(
+        "MinerU 任务创建失败：HTTP " +
+          created.status +
+          " " +
+          tail(await created.text()),
+      );
+    const task = (await created.json()) as unknown as Record<string, unknown>;
+    const taskID = String(task.task_id || "");
+    const files = Array.isArray(task.files) ? task.files : [];
+    const source = files[0] as Record<string, unknown> | undefined;
+    const sourceID = String(source?.file_id || "");
+    const upload = source?.upload as Record<string, unknown> | undefined;
+    const uploadURL = String(upload?.url || "");
+    if (!taskID || !sourceID || !uploadURL)
+      throw new Error("MinerU 任务创建响应缺少上传信息");
+
+    const uploadHeaders = {
+      ...((upload?.headers as Record<string, string> | null) || {}),
+      "content-type": "application/octet-stream",
+    };
+    const uploaded = await fetchWithTimeout(
+      resolveMinerUUrl(endpoint, uploadURL),
+      {
+        method: String(upload?.method || "PUT").toUpperCase(),
+        headers: uploadHeaders,
+        body: bytes,
+      },
+      remainingTimeout(deadline),
+      this.controller?.signal,
+    );
+    if (!uploaded.ok)
+      throw new Error(
+        "MinerU 上传失败：HTTP " +
+          uploaded.status +
+          " " +
+          tail(await uploaded.text()),
+      );
+
+    while (Date.now() < deadline) {
+      await delay(1500);
+      const response = await fetchWithTimeout(
+        endpoint + "/v1/tasks/" + encodeURIComponent(taskID),
+        {},
+        remainingTimeout(deadline),
+        this.controller?.signal,
+      );
+      if (!response.ok)
+        throw new Error("MinerU 任务查询失败：HTTP " + response.status);
+      const status = (await response.json()) as unknown as Record<
+        string,
+        unknown
+      >;
+      const state = String(status.status || "").toLocaleLowerCase();
+      if (["failed", "canceled"].includes(state))
+        throw new Error(
+          "MinerU 解析失败：" + (mineruTaskError(status) || state),
+        );
+      if (!["completed", "partial"].includes(state)) continue;
+
+      const resultFiles = Array.isArray(status.files) ? status.files : [];
+      const result = resultFiles.find((entry) => {
+        const row = entry as Record<string, unknown> | undefined;
+        return String(row?.file_id || "") === sourceID;
+      }) as Record<string, unknown> | undefined;
+      const resultStatus = String(result?.status || "").toLocaleLowerCase();
+      const resultURL = String(result?.result_url || "");
+      if (resultStatus === "failed" || !resultURL)
+        throw new Error(
+          "MinerU 解析失败：" +
+            (mineruTaskError(result || status) || "没有结果下载地址"),
+        );
+      const resultResponse = await fetchWithTimeout(
+        resolveMinerUUrl(endpoint, resultURL),
+        {},
+        remainingTimeout(deadline),
+        this.controller?.signal,
+      );
+      if (!resultResponse.ok)
+        throw new Error("MinerU 结果下载失败：HTTP " + resultResponse.status);
+      return this.selfHostedResponse(resultResponse, pdfPath);
+    }
+    throw new Error("MinerU 任务超时");
+  }
+
+  /**
+   * Legacy MinerU v1 flow: create upload -> put content -> complete -> parse
+   * job -> poll -> download the result archive. Returns undefined when the
+   * endpoint does not expose this API so the older 3.x protocol can be tried.
+   */
+  private async convertWithV1UploadApi(
     bytes: Uint8Array,
     fileName: string,
     pdfPath: string,
@@ -938,8 +1068,15 @@ export class MinerUConversionService {
     const deadline = Date.now() + this.profile.timeoutMs;
     try {
       const bytes = await IOUtils.read(pdfPath);
-      const fileName = PathUtils.filename(pdfPath);
-      const v1Result = await this.convertWithV1Api(
+      const fileName = safeFilename(pdfPath);
+      const taskResult = await this.convertWithV1TasksApi(
+        bytes,
+        fileName,
+        pdfPath,
+        deadline,
+      );
+      if (taskResult) return taskResult;
+      const v1Result = await this.convertWithV1UploadApi(
         bytes,
         fileName,
         pdfPath,
@@ -1468,29 +1605,13 @@ export async function mineruResultFromZip(
   bytes: Uint8Array,
   preferredBaseName = "",
 ): Promise<MinerUConversionResult> {
-  return hasNativeZipReader()
-    ? mineruResultFromNativeZip(bytes, preferredBaseName)
-    : mineruResultFromJSZip(bytes, preferredBaseName);
-}
-
-async function mineruResultFromJSZip(
-  bytes: Uint8Array,
-  preferredBaseName: string,
-): Promise<MinerUConversionResult> {
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(bytes);
-  } catch (error) {
-    throw new Error("无法打开 MinerU 结果压缩包", { cause: error });
-  }
-  const files = Object.values(zip.files).filter((entry) => !entry.dir);
+  const files = await readMinerUArchiveEntries(bytes);
+  const decoder = new TextDecoder();
   const markdownEntries = files.filter((entry) => /\.md$/i.test(entry.name));
-  const candidates = await Promise.all(
-    markdownEntries.map(async (entry) => ({
-      name: entry.name,
-      text: await entry.async("string"),
-    })),
-  );
+  const candidates = markdownEntries.map((entry) => ({
+    name: entry.name,
+    text: decoder.decode(entry.bytes),
+  }));
   if (!candidates.length) throw new Error("MinerU 结果压缩包中没有 Markdown");
   candidates.sort(
     (a, b) =>
@@ -1498,145 +1619,38 @@ async function mineruResultFromJSZip(
       markdownScore(a.name, preferredBaseName, a.text.length),
   );
   const figureMap = new Map<string, MinerUParsedFigure>();
+  const archiveNames = files.map((file) => file.name);
   for (const manifest of files.filter((entry) =>
     isContentListName(entry.name),
   )) {
     let content: unknown;
     try {
-      content = JSON.parse(await manifest.async("string"));
+      content = JSON.parse(decoder.decode(manifest.bytes));
     } catch {
       continue;
     }
     const rows = mineruContentRows(content);
     for (const value of rows) {
-      const row = value as Record<string, unknown>;
-      const sourceKind = String(row?.type || "").toLocaleLowerCase();
-      if (!["image", "table", "chart"].includes(sourceKind)) continue;
-      const imagePath = normalizeArchivePath(String(row.img_path || ""));
-      if (!imagePath) continue;
-      const imageEntry = resolveArchiveImage(files, manifest.name, imagePath);
+      const descriptor = mineruFigureDescriptor(
+        value,
+        manifest.name,
+        archiveNames,
+      );
+      if (!descriptor) continue;
+      const imageEntry = files.find(
+        (file) => file.name === descriptor.imageName,
+      );
       if (!imageEntry) continue;
-      const kind = sourceKind === "table" ? "table" : "figure";
-      const id = `mineru:${kind}:${encodeURIComponent(imagePath)}`;
-      const pageIndex = Math.max(0, Math.floor(Number(row.page_idx) || 0));
-      figureMap.set(id, {
-        id,
-        kind,
-        caption: mineruCaption(row, sourceKind),
-        pageIndex,
-        rect: normalizeMinerURect(row.bbox),
-        imageName: imageEntry.name,
-        bytes: await imageEntry.async("uint8array"),
-      });
+      figureMap.set(descriptor.id, { ...descriptor, bytes: imageEntry.bytes });
     }
   }
   return {
     markdown: candidates[0].text,
     figures: [...figureMap.values()],
     archive: bytes,
+    archiveEntries: files,
     markdownArchivePath: candidates[0].name,
   };
-}
-
-function hasNativeZipReader(): boolean {
-  return (
-    typeof Components !== "undefined" &&
-    typeof PathUtils !== "undefined" &&
-    typeof IOUtils !== "undefined"
-  );
-}
-
-async function mineruResultFromNativeZip(
-  bytes: Uint8Array,
-  preferredBaseName: string,
-): Promise<MinerUConversionResult> {
-  const temporaryPath = PathUtils.join(
-    PathUtils.tempDir,
-    `zrdb-mineru-result-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`,
-  );
-  let reader: nsIZipReader | undefined;
-  try {
-    await (IOUtils as any).write(temporaryPath, bytes);
-    const file = (Components.classes as any)[
-      "@mozilla.org/file/local;1"
-    ].createInstance(Components.interfaces.nsIFile) as nsIFile;
-    file.initWithPath(temporaryPath);
-    reader = (Components.classes as any)[
-      "@mozilla.org/libjar/zip-reader;1"
-    ].createInstance(Components.interfaces.nsIZipReader) as nsIZipReader;
-    reader.open(file);
-    const names: string[] = [];
-    const iterator = reader.findEntries("*");
-    while (iterator.hasMore()) {
-      const name = iterator.getNext();
-      if (!reader.getEntry(name).isDirectory) names.push(name);
-    }
-    const candidates = names
-      .filter((name) => /\.md$/i.test(name))
-      .map((name) => ({
-        name,
-        text: new TextDecoder().decode(readNativeZipEntry(reader!, name)),
-      }));
-    if (!candidates.length) throw new Error("MinerU 结果压缩包中没有 Markdown");
-    candidates.sort(
-      (a, b) =>
-        markdownScore(b.name, preferredBaseName, b.text.length) -
-        markdownScore(a.name, preferredBaseName, a.text.length),
-    );
-    const figureMap = new Map<string, MinerUParsedFigure>();
-    for (const manifestName of names.filter((name) =>
-      isContentListName(name),
-    )) {
-      let rows: unknown[];
-      try {
-        const content = JSON.parse(
-          new TextDecoder().decode(readNativeZipEntry(reader, manifestName)),
-        ) as unknown;
-        rows = mineruContentRows(content);
-      } catch {
-        continue;
-      }
-      for (const value of rows) {
-        const descriptor = mineruFigureDescriptor(value, manifestName, names);
-        if (!descriptor) continue;
-        figureMap.set(descriptor.id, {
-          ...descriptor,
-          bytes: readNativeZipEntry(reader, descriptor.imageName),
-        });
-      }
-    }
-    return {
-      markdown: candidates[0].text,
-      figures: [...figureMap.values()],
-      archive: bytes,
-      markdownArchivePath: candidates[0].name,
-    };
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("MinerU")) throw error;
-    throw new Error("Zotero 无法读取 MinerU 结果压缩包", { cause: error });
-  } finally {
-    try {
-      reader?.close();
-    } catch {
-      // The reader may already be closed after a malformed archive error.
-    }
-    await IOUtils.remove(temporaryPath, { ignoreAbsent: true });
-  }
-}
-
-function readNativeZipEntry(reader: nsIZipReader, name: string): Uint8Array {
-  const input = reader.getInputStream(name);
-  try {
-    const binary = (Components.classes as any)[
-      "@mozilla.org/binaryinputstream;1"
-    ].createInstance(
-      Components.interfaces.nsIBinaryInputStream,
-    ) as nsIBinaryInputStream;
-    binary.setInputStream(input);
-    return Uint8Array.from(binary.readByteArray(Number(binary.available())));
-  } finally {
-    input.close();
-  }
 }
 
 function markdownFromInlineResult(value: Record<string, unknown>): string {
@@ -1658,19 +1672,6 @@ function normalizeArchivePath(value: string): string {
     .filter((part) => part && part !== ".");
   if (!parts.length || parts.includes("..")) return "";
   return parts.join("/");
-}
-
-function resolveArchiveImage(
-  files: JSZipObject[],
-  manifestName: string,
-  imagePath: string,
-): JSZipObject | undefined {
-  const name = resolveArchiveImageName(
-    files.map((file) => file.name),
-    manifestName,
-    imagePath,
-  );
-  return name ? files.find((file) => file.name === name) : undefined;
 }
 
 function resolveArchiveImageName(
@@ -1719,6 +1720,27 @@ function mineruJobError(job: Record<string, unknown>): string {
     if (message) return message;
   }
   return "";
+}
+
+function mineruTaskError(task: Record<string, unknown>): string {
+  const direct = String(task.error || task.err_msg || "");
+  if (direct) return direct;
+  const files = Array.isArray(task.files) ? task.files : [];
+  for (const entry of files) {
+    const row = entry as Record<string, unknown> | undefined;
+    const error = row?.error as Record<string, unknown> | undefined;
+    const message = String(error?.message || error?.code || "");
+    if (message) return message;
+  }
+  return "";
+}
+
+function resolveMinerUUrl(endpoint: string, value: string): string {
+  try {
+    return new URL(value, endpoint + "/").toString();
+  } catch {
+    return value;
+  }
 }
 
 function mineruContentRows(content: unknown): unknown[] {
@@ -1938,17 +1960,43 @@ async function findFiles(
 async function jsonResponse(
   response: Response,
   action: string,
+  allowedErrorCodes: number[] = [],
 ): Promise<Record<string, any>> {
-  let value: Record<string, any>;
+  const body = await response.text();
+  let parsed: unknown;
   try {
-    value = (await response.json()) as Record<string, any>;
+    parsed = JSON.parse(body);
   } catch (error) {
-    throw new Error(`${action}失败：服务没有返回 JSON`, { cause: error });
+    throw new Error(`${action}失败：${responseFailureDetail(response, body)}`, {
+      cause: error,
+    });
   }
-  if (!response.ok || ("code" in value && value.code !== 0)) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${action}失败：${responseFailureDetail(response, body)}`);
+  }
+  const value = parsed as Record<string, any>;
+  if ([401, 403].includes(response.status))
+    throw new Error(
+      `${action}失败：HTTP ${response.status}；MinerU 认证失败，请检查 API Token`,
+    );
+  const code = "code" in value ? Number(value.code) : 0;
+  if (!response.ok || (code !== 0 && !allowedErrorCodes.includes(code))) {
     throw new Error(`${action}失败：${value.msg || `HTTP ${response.status}`}`);
   }
   return value;
+}
+
+function responseFailureDetail(response: Response, body: string): string {
+  if ([401, 403].includes(response.status))
+    return `HTTP ${response.status}；MinerU 认证失败，请检查 API Token`;
+  const excerpt = body
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+  return `HTTP ${response.status}；${excerpt || (body.trim() ? "服务返回了非 JSON 响应" : "服务返回了空响应")}`;
 }
 
 async function downloadBytes(
@@ -2009,6 +2057,13 @@ async function fetchWithTimeout(
 
 function normalizeEndpoint(value: string): string {
   return value.trim().replace(/\/+$/, "");
+}
+
+function normalizeOfficialEndpoint(value: string): string {
+  return normalizeEndpoint(value).replace(
+    /\/(?:file-urls\/batch|extract\/task(?:\/[^/]+)?|extract-results\/batch(?:\/[^/]+)?)$/i,
+    "",
+  );
 }
 
 function isPrivateEndpoint(value: string): boolean {

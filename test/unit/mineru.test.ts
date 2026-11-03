@@ -293,12 +293,30 @@ describe("MinerU integration", function () {
     expect(
       parseMinerUProfile({ ...profile, mode: "local-client" }).mode,
     ).to.equal("self-hosted");
+    expect(
+      parseMinerUProfile({
+        ...profile,
+        mode: "official-api",
+        officialEndpoint: "https://mineru.net/api/v4/extract/task",
+      }).officialEndpoint,
+    ).to.equal("https://mineru.net/api/v4");
+    expect(
+      parseMinerUProfile({
+        ...profile,
+        mode: "official-api",
+        officialEndpoint: "https://mineru.net/api/v4/file-urls/batch",
+      }).officialEndpoint,
+    ).to.equal("https://mineru.net/api/v4");
   });
 
   it("migrates a token mistakenly stored as an environment variable name", function () {
     const prefix = `${config.prefsPrefix}.`;
     const values = new Map<string, unknown>([
       [`${prefix}mineruSettingsVersion`, 4],
+      [
+        `${prefix}mineruOfficialEndpoint`,
+        "https://mineru.net/api/v4/extract/task",
+      ],
       [`${prefix}mineruOfficialTokenEnvironment`, "legacy-token.invalid"],
       [`${prefix}mineruOfficialToken`, ""],
     ]);
@@ -317,7 +335,10 @@ describe("MinerU integration", function () {
       expect(values.get(`${prefix}mineruOfficialTokenEnvironment`)).to.equal(
         "MINERU_API_TOKEN",
       );
-      expect(values.get(`${prefix}mineruSettingsVersion`)).to.equal(5);
+      expect(values.get(`${prefix}mineruOfficialEndpoint`)).to.equal(
+        "https://mineru.net/api/v4",
+      );
+      expect(values.get(`${prefix}mineruSettingsVersion`)).to.equal(6);
 
       values.set(`${prefix}mineruSettingsVersion`, 4);
       values.set(`${prefix}mineruOfficialToken`, "");
@@ -338,6 +359,7 @@ describe("MinerU integration", function () {
   it("uses a directly entered token before the environment fallback", async function () {
     let environmentReads = 0;
     let authorization = "";
+    let requestUrl = "";
     const restoreServices = replaceGlobal("Services", {
       env: {
         get: () => {
@@ -348,9 +370,10 @@ describe("MinerU integration", function () {
     });
     const restoreFetch = replaceGlobal(
       "fetch",
-      async (_url: unknown, init?: RequestInit) => {
+      async (url: unknown, init?: RequestInit) => {
+        requestUrl = String(url);
         authorization = new Headers(init?.headers).get("Authorization") || "";
-        return new Response(null, { status: 404 });
+        return jsonResponse({ code: -60012, msg: "task not found or expire" });
       },
     );
     try {
@@ -359,6 +382,9 @@ describe("MinerU integration", function () {
       ).probe();
       expect(result).to.include("认证已通过");
       expect(authorization).to.equal("Bearer direct-test-token");
+      expect(requestUrl).to.equal(
+        "https://mineru.net/api/v4/extract/task/invalid-zrdb-connection-test",
+      );
       expect(environmentReads).to.equal(0);
     } finally {
       restoreFetch();
@@ -381,7 +407,7 @@ describe("MinerU integration", function () {
       "fetch",
       async (_url: unknown, init?: RequestInit) => {
         authorization = new Headers(init?.headers).get("Authorization") || "";
-        return new Response(null, { status: 404 });
+        return jsonResponse({ code: -60012, msg: "task not found or expire" });
       },
     );
     try {
@@ -391,6 +417,36 @@ describe("MinerU integration", function () {
     } finally {
       restoreFetch();
       restoreServices();
+    }
+  });
+
+  it("reports the real HTTP response when MinerU does not return JSON", async function () {
+    const restore = [
+      stubPathUtils(),
+      replaceGlobal(
+        "fetch",
+        async () =>
+          new Response("404 page not found\n", {
+            status: 404,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          }),
+      ),
+    ];
+    try {
+      let failure: unknown;
+      try {
+        await (
+          new MinerUConversionService(officialProfile("test-token")) as any
+        ).convertWithOfficialApi("C:\\papers\\paper.pdf", "PAPER1");
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).to.be.instanceOf(Error);
+      expect((failure as Error).message).to.equal(
+        "申请 MinerU 上传地址失败：HTTP 404；404 page not found",
+      );
+    } finally {
+      restore.reverse().forEach((restoreGlobal) => restoreGlobal());
     }
   });
 
@@ -620,6 +676,89 @@ describe("MinerU integration", function () {
     }
   });
 
+  it("runs the MinerU 4.1 task flow and downloads the result archive", async function () {
+    this.timeout(10_000);
+    const fileBytes = Uint8Array.from([37, 80, 68, 70, 4, 5, 6]);
+    const archive = await buildV1Archive();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    let polls = 0;
+    const restore = [
+      replaceGlobal("IOUtils", { read: async () => fileBytes }),
+      stubPathUtils(),
+      replaceGlobal("fetch", async (url: unknown, init: RequestInit) => {
+        const target = String(url);
+        requests.push({ url: target, init });
+        if (target.endsWith("/v1/tasks"))
+          return jsonResponse({
+            task_id: "task-1",
+            files: [
+              {
+                file_id: "file-1",
+                upload: { url: "/v1/tasks/task-1/files/file-1" },
+              },
+            ],
+          });
+        if (target.endsWith("/v1/tasks/task-1/files/file-1"))
+          return new Response("", { status: 200 });
+        if (target.endsWith("/v1/tasks/task-1")) {
+          polls += 1;
+          return jsonResponse(
+            polls === 1
+              ? { task_id: "task-1", status: "running", files: [] }
+              : {
+                  task_id: "task-1",
+                  status: "completed",
+                  files: [
+                    {
+                      file_id: "file-1",
+                      status: "completed",
+                      result_url: "/v1/files/file-1/content",
+                    },
+                  ],
+                },
+          );
+        }
+        if (target.endsWith("/v1/files/file-1/content"))
+          return new Response(archive, {
+            status: 200,
+            headers: { "content-type": "application/zip" },
+          });
+        throw new Error("unexpected request " + target);
+      }),
+    ];
+    try {
+      const result = await convertWithSelfHosted(
+        new MinerUConversionService(selfHostedProfile()),
+        "C:\\papers\\task.pdf",
+      );
+      expect(result.markdown).to.contain("images/page_0_image_body_2.jpg");
+      expect(requests.map((entry) => entry.url)).to.deep.equal([
+        "http://127.0.0.1:8000/v1/tasks",
+        "http://127.0.0.1:8000/v1/tasks/task-1/files/file-1",
+        "http://127.0.0.1:8000/v1/tasks/task-1",
+        "http://127.0.0.1:8000/v1/tasks/task-1",
+        "http://127.0.0.1:8000/v1/files/file-1/content",
+      ]);
+      const create = requests[0];
+      const createBody = JSON.parse(String(create.init.body)) as Record<
+        string,
+        unknown
+      >;
+      expect(createBody.tier).to.equal("standard");
+      expect(createBody.ocr_mode).to.equal("ocr");
+      expect(createBody.output_formats).to.deep.equal(["default"]);
+      const source = (createBody.files as Array<Record<string, unknown>>)[0];
+      expect(source.file_name).to.equal("task.pdf");
+      expect(source.bytes).to.equal(fileBytes.byteLength);
+      expect(source.sha256sum).to.match(/^[0-9a-f]{64}$/);
+      expect([...(requests[1].init.body as Uint8Array)]).to.deep.equal([
+        ...fileBytes,
+      ]);
+    } finally {
+      restore.reverse().forEach((restoreGlobal) => restoreGlobal());
+    }
+  });
+
   it("runs the MinerU 4.x upload and job flow and maps structured content", async function () {
     // The job poll loop waits between attempts, so the default timeout is too tight.
     this.timeout(10_000);
@@ -633,6 +772,8 @@ describe("MinerU integration", function () {
       replaceGlobal("fetch", async (url: unknown, init: RequestInit) => {
         const target = String(url);
         requests.push({ url: target, init });
+        if (target.endsWith("/v1/tasks"))
+          return new Response("", { status: 404 });
         if (target.endsWith("/v1/uploads"))
           return jsonResponse({ id: "upload-1", status: "pending" });
         if (target.endsWith("/v1/uploads/upload-1/content"))

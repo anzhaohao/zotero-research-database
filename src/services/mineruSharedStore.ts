@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import { readMinerUArchiveEntries } from "./mineruArchive";
 import type { MinerUConversionResult, MinerUMode } from "./mineru";
 
 const SHARED_STORE_SCHEMA_VERSION = 1;
@@ -113,7 +113,10 @@ async function completeSharedMinerUCache(
       const path = PathUtils.join(paperDirectory, ...relative.split("/"));
       if (!(await sharedIO().exists(path))) return "";
       const stat = await sharedIO().stat(path);
-      if (stat.type !== "file" || Number(stat.size) !== Number(entry.size))
+      if (
+        !["file", "regular"].includes(stat.type) ||
+        Number(stat.size) !== Number(entry.size)
+      )
         return "";
     }
     const markdownPath = PathUtils.join(paperDirectory, "full.md");
@@ -276,27 +279,18 @@ export async function writeSharedMinerUResult(options: {
     await sharedIO().makeDirectory(staging, { ignoreExisting: false });
     let markdownSourcePath = result.markdownArchivePath || "full.md";
     if (result.archive?.byteLength) {
-      const zip = await JSZip.loadAsync(result.archive);
-      for (const entry of Object.values(zip.files)) {
-        if (entry.dir) continue;
+      const archiveEntries =
+        result.archiveEntries ||
+        (await readMinerUArchiveEntries(result.archive));
+      for (const entry of archiveEntries) {
         const relative = normalizeRelativePath(entry.name);
         if (!relative || relative.toLocaleLowerCase() === "result.zip")
           throw new Error("MinerU ZIP 包含无效或冲突路径");
-        files.push(
-          await writeBytes(
-            staging,
-            "raw/" + relative,
-            await entry.async("uint8array"),
-          ),
-        );
+        files.push(await writeBytes(staging, "raw/" + relative, entry.bytes));
       }
-      if (
-        !Object.values(zip.files).some(
-          (entry) => !entry.dir && entry.name === markdownSourcePath,
-        )
-      ) {
-        const candidate = Object.values(zip.files).find(
-          (entry) => !entry.dir && /\.md$/i.test(entry.name),
+      if (!archiveEntries.some((entry) => entry.name === markdownSourcePath)) {
+        const candidate = archiveEntries.find((entry) =>
+          /\.md$/i.test(entry.name),
         );
         if (!candidate) throw new Error("MinerU ZIP 中没有 Markdown");
         markdownSourcePath = candidate.name;

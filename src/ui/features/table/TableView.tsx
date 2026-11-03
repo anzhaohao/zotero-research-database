@@ -4,7 +4,6 @@ import { TRANSLATED_TITLE_FIELD_ID } from "../../../domain/defaults";
 import type {
   FieldDefinition,
   ItemResearchRecord,
-  ViewColor,
   ViewLayout,
 } from "../../../domain/types";
 import {
@@ -20,7 +19,7 @@ import { TableFlatRowsCache, type TableFlatRow } from "./tableRows";
 import { nativeColumns, type ColumnDefinition } from "./tableColumns";
 import { type FigureRecord } from "../figures/figureRecords";
 import { type EditingCell } from "./tableTypes";
-import { type ColorTarget, colorValue, ColorMenu } from "./ColorMenu";
+import { colorValue } from "./ColorMenu";
 import { useColumns } from "./useColumns";
 import {
   COLUMN_RESIZE_END_GUTTER,
@@ -75,7 +74,6 @@ export function TableView(props: {
   const [draftLayout, setDraftLayout] = useState<ViewLayout | undefined>(
     undefined,
   );
-  const [colorTarget, setColorTarget] = useState<ColorTarget>();
   const [selectedColumnID, setSelectedColumnID] = useState<string>();
   const [activeCell, setActiveCell] = useState<{
     itemKey: string;
@@ -414,37 +412,6 @@ export function TableView(props: {
     );
   }, [columns, shownLayout]);
 
-  const openColorMenu = (
-    event: React.MouseEvent,
-    target: Omit<ColorTarget, "left" | "top">,
-  ) => {
-    event.stopPropagation();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const view = event.currentTarget.ownerDocument?.defaultView;
-    setColorTarget({
-      ...target,
-      left: Math.min(rect.left, (view?.innerWidth || 900) - 230),
-      top: rect.bottom + 4,
-    });
-  };
-
-  const applyColor = (color: ViewColor) => {
-    if (!colorTarget) return;
-    if (colorTarget.kind === "row") {
-      const rowColors = { ...shownLayout.rowColors };
-      if (color === "none") delete rowColors[colorTarget.itemKey];
-      else rowColors[colorTarget.itemKey] = color;
-      props.onLayout({ ...shownLayout, rowColors });
-    } else if (colorTarget.columnID) {
-      const key = `${colorTarget.itemKey}:${colorTarget.columnID}`;
-      const cellColors = { ...shownLayout.cellColors };
-      if (color === "none") delete cellColors[key];
-      else cellColors[key] = color;
-      props.onLayout({ ...shownLayout, cellColors });
-    }
-    setColorTarget(undefined);
-  };
-
   return (
     <div className="zrdb-table-shell">
       <div className="zrdb-table-scroll" ref={parentRef}>
@@ -688,7 +655,7 @@ export function TableView(props: {
                               }
                             />
                           )}
-                          {column.field ? (
+                          {column.field && (
                             <IconButton
                               icon="refresh"
                               label={
@@ -710,30 +677,6 @@ export function TableView(props: {
                                 );
                               }}
                             />
-                          ) : (
-                            <>
-                              <IconButton
-                                icon="color"
-                                label="设置单元格背景色"
-                                onClick={(event) =>
-                                  openColorMenu(event, {
-                                    kind: "cell",
-                                    itemKey: item.key,
-                                    columnID: column.id,
-                                  })
-                                }
-                              />
-                              <IconButton
-                                icon="rowColor"
-                                label="设置整行背景色"
-                                onClick={(event) =>
-                                  openColorMenu(event, {
-                                    kind: "row",
-                                    itemKey: item.key,
-                                  })
-                                }
-                              />
-                            </>
                           )}
                         </span>
                       )}
@@ -801,13 +744,6 @@ export function TableView(props: {
           })}
         </div>
       </div>
-      {colorTarget && (
-        <ColorMenu
-          target={colorTarget}
-          onChoose={applyColor}
-          onClose={() => setColorTarget(undefined)}
-        />
-      )}
     </div>
   );
 }

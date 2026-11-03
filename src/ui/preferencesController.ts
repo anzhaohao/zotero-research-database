@@ -241,7 +241,7 @@ export class PreferencesController {
     if (button) button.disabled = true;
     try {
       this.profileFromControls();
-      this.mineruProfileFromControls();
+      const mineruProfile = this.mineruProfileFromControls();
       // Initialization is cached; do not reload the file over unsaved edits.
       await initializePortableSettings();
       const requestedRoot = String(
@@ -250,7 +250,10 @@ export class PreferencesController {
       const previousRoot = String(getPref("dataRoot") || "").trim();
       for (const key of prefKeys) {
         if (key === "dataRoot") continue;
-        const raw = inputValue(this.root, key);
+        const raw =
+          key === "mineruOfficialEndpoint"
+            ? mineruProfile.officialEndpoint
+            : inputValue(this.root, key);
         const value = [
           "defaultRowHeight",
           "agentTimeoutMs",
@@ -264,6 +267,11 @@ export class PreferencesController {
       }
       await flushPortableSettings();
       if (requestedRoot !== previousRoot) setDataRoot(requestedRoot);
+      const officialEndpointControl = this.root.querySelector<HTMLInputElement>(
+        '[data-pref="mineruOfficialEndpoint"]',
+      );
+      if (officialEndpointControl)
+        officialEndpointControl.value = mineruProfile.officialEndpoint;
       this.status(
         requestedRoot !== previousRoot
           ? "已保存本机设置；研究数据库目录将在重启 Zotero 后切换"

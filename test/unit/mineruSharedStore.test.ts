@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { mineruResultFromZip } from "../../src/services/mineru";
 import {
   claimSharedMinerUWork,
   findSharedMinerUCache,
@@ -145,7 +146,7 @@ describe("shared MinerU store", function () {
         stat: async (filePath: string) => {
           const info = await stat(filePath);
           return {
-            type: info.isDirectory() ? "directory" : "file",
+            type: info.isDirectory() ? "directory" : "regular",
             size: info.size,
             lastModified: info.mtimeMs,
           };
@@ -209,6 +210,55 @@ describe("shared MinerU store", function () {
         await readFile(path.join(paperDirectory, "raw", "result.zip")),
       ),
     ).to.deep.equal(archive);
+  });
+
+  it("reuses one archive read without requiring setImmediate", async function () {
+    const zip = new JSZip();
+    zip.file("paper/full.md", "![plot](images/plot.png)\n\nBody");
+    zip.file("paper/images/plot.png", Uint8Array.from([1, 2, 3]));
+    const archive = await zip.generateAsync({ type: "uint8array" });
+    const originalLoad = JSZip.loadAsync;
+    const immediateDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "setImmediate",
+    );
+    let archiveReads = 0;
+    JSZip.loadAsync = async (...args: Parameters<typeof JSZip.loadAsync>) => {
+      archiveReads += 1;
+      return originalLoad(...args);
+    };
+    delete (globalThis as any).setImmediate;
+    try {
+      const result = await mineruResultFromZip(archive, "paper");
+      expect(archiveReads).to.equal(1);
+      expect(result.archiveEntries).to.have.length(2);
+      expect((globalThis as any).setImmediate).to.equal(undefined);
+
+      const paperDirectory = await writeSharedMinerUResult({
+        root,
+        identity,
+        result,
+        sourceMode: "official-api",
+      });
+
+      expect(archiveReads, "shared-store write must not unzip again").to.equal(
+        1,
+      );
+      expect(
+        await readFile(path.join(paperDirectory, "full.md"), "utf8"),
+      ).to.equal("![plot](raw/paper/images/plot.png)\n\nBody");
+      expect(
+        new Uint8Array(
+          await readFile(
+            path.join(paperDirectory, "raw", "paper", "images", "plot.png"),
+          ),
+        ),
+      ).to.deep.equal(Uint8Array.from([1, 2, 3]));
+    } finally {
+      JSZip.loadAsync = originalLoad;
+      if (immediateDescriptor)
+        Object.defineProperty(globalThis, "setImmediate", immediateDescriptor);
+    }
   });
 
   it("rejects incomplete generations and changed file sizes", async function () {

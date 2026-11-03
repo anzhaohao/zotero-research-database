@@ -19,7 +19,14 @@ import {
   writeRecordExtra,
 } from "../../src/core/extraProperties";
 import { createEmptyRecord, setManualValue } from "../../src/core/records";
-import { mineruResultFromDirectory } from "../../src/services/mineru";
+import {
+  mineruResultFromDirectory,
+  mineruResultFromZip,
+} from "../../src/services/mineru";
+import {
+  findSharedMinerUCache,
+  writeSharedMinerUResult,
+} from "../../src/services/mineruSharedStore";
 import {
   clearPdfThumbnailCache,
   getPdfPageCount,
@@ -341,7 +348,49 @@ describe("startup", function () {
     }
   });
 
-  it("should expose only edit copy and regenerate actions on custom cells", async function () {
+  it("should reuse native MinerU ZIP entries in the shared store", async function () {
+    const root = PathUtils.join(
+      PathUtils.tempDir,
+      `zrdb-mineru-native-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    const pdfSha256 = "b".repeat(64);
+    const encoded =
+      "UEsDBAoAAAAAAEtTBF0cmVpYDQAAAA0AAAAJAAAAUkVBRE1FLm1kbm90IHRoZSBwYXBlclBLAwQKAAAAAABLUwRdAAAAAAAAAAAAAAAABgAAAHBhcGVyL1BLAwQKAAAAAABLUwRdAAAAAAAAAAAAAAAACwAAAHBhcGVyL2F1dG8vUEsDBAoAAAAAAEtTBF0l9xzHDgAAAA4AAAATAAAAcGFwZXIvYXV0by9wYXBlci5tZGZhbGxiYWNrIHBhcGVyUEsDBAoAAAAAAEtTBF3gVWpDHwAAAB8AAAANAAAAcGFwZXIvZnVsbC5tZCMgRnVsbCBwYXBlclxuQ29udmVydGVkIGNvbnRlbnRQSwECFAAKAAAAAABLUwRdHJlaWA0AAAANAAAACQAAAAAAAAAAAAAAAAAAAAAAUkVBRE1FLm1kUEsBAhQACgAAAAAAS1MEXQAAAAAAAAAAAAAAAAYAAAAAAAAAAAAQAAAANAAAAHBhcGVyL1BLAQIUAAoAAAAAAEtTBF0AAAAAAAAAAAAAAAALAAAAAAAAAAAAEAAAAFgAAABwYXBlci9hdXRvL1BLAQIUAAoAAAAAAEtTBF0l9xzHDgAAAA4AAAATAAAAAAAAAAAAAAAAAIEAAABwYXBlci9hdXRvL3BhcGVyLm1kUEsBAhQACgAAAAAAS1MEXeBVakMfAAAAHwAAAA0AAAAAAAAAAAAAAAAAwAAAAHBhcGVyL2Z1bGwubWRQSwUGAAAAAAUABQAgAQAACgEAAAAA";
+    const bytes = Uint8Array.from(atob(encoded), (character) =>
+      character.charCodeAt(0),
+    );
+    try {
+      const result = await mineruResultFromZip(bytes, "paper");
+      assert.equal(result.markdown, "# Full paper\\nConverted content");
+      assert.lengthOf(result.archiveEntries || [], 3);
+      const paperDirectory = await writeSharedMinerUResult({
+        root,
+        identity: {
+          libraryID: Zotero.Libraries.userLibraryID,
+          attachmentKey: "ZIPTEST1",
+          pdfSha256,
+          pdfFileName: "paper.pdf",
+        },
+        result,
+        sourceMode: "official-api",
+      });
+      assert.equal(
+        await findSharedMinerUCache(root, pdfSha256),
+        paperDirectory,
+      );
+      assert.equal(
+        await Zotero.File.getContentsAsync(
+          PathUtils.join(paperDirectory, "full.md"),
+          "utf-8",
+        ),
+        "# Full paper\\nConverted content",
+      );
+    } finally {
+      await IOUtils.remove(root, { recursive: true, ignoreAbsent: true });
+    }
+  });
+
+  it("should keep custom actions and hide color actions on every cell", async function () {
     const win = Zotero.getMainWindow();
     const doc = win.document;
     const item = new Zotero.Item("journalArticle");
@@ -403,6 +452,53 @@ describe("startup", function () {
         cell!.querySelector<HTMLButtonElement>('[aria-label="重新生成"]')!
           .disabled,
       );
+      const cells = [...row!.querySelectorAll<HTMLElement>(".zrdb-table-cell")];
+      const customFields = new Map(
+        workspace.fields
+          .filter(
+            (entry) =>
+              !entry.archived && entry.id !== TRANSLATED_TITLE_FIELD_ID,
+          )
+          .map((entry) => [entry.id, entry]),
+      );
+      for (const [index, currentCell] of cells.entries()) {
+        currentCell.click();
+        await Zotero.Promise.delay(20);
+        assert.notExists(
+          currentCell.querySelector('[aria-label="设置单元格背景色"]'),
+          `column ${index} must not expose cell colors`,
+        );
+        assert.notExists(
+          currentCell.querySelector('[aria-label="设置整行背景色"]'),
+          `column ${index} must not expose row colors`,
+        );
+        const customField = customFields.get(
+          headers[index]?.dataset.columnId || "",
+        );
+        if (customField) {
+          const actionLabels = [
+            ...currentCell.querySelectorAll<HTMLButtonElement>(
+              ".zrdb-cell-actions button",
+            ),
+          ].map((button) => button.getAttribute("aria-label"));
+          assert.deepEqual(
+            actionLabels,
+            [
+              "编辑",
+              "复制内容",
+              customField.extraction.enabled ? "重新生成" : "未启用 AI 提取",
+            ],
+            `custom column ${index} must expose only edit, copy and regenerate`,
+          );
+        } else {
+          assert.notExists(
+            currentCell.querySelector(
+              '.zrdb-cell-actions [aria-label="重新生成"]',
+            ),
+            `native column ${index} must not expose AI regeneration`,
+          );
+        }
+      }
     } finally {
       if (toggleButton!.getAttribute("data-mode") === "table")
         clickControl(win, toggleButton!);

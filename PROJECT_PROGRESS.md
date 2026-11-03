@@ -831,7 +831,7 @@ npm run build                           ✔ production
 
 ### 0.3.35 生产包完成（2026-09-09）
 
-- 生产 XPI：`.scaffold/build/zotero-research-database.xpi`；稳定副本：`.scaffold/releases/zotero-research-database-0.3.35.xpi`。
+- 生产 XPI：`.scaffold/build/zotero-research-database.xpi`；稳定副本：`release/archive/zotero-research-database-0.3.35.xpi`。
 - 大小 `903194` 字节；SHA-256 `A482A48DD35B6928B816A740F03353B64D1A17494EE38271BC83027365D85350`。
 - ZIP manifest 已核对版本 `0.3.35` 与插件 ID；未安装到正式 Zotero。
 - 验证：179 项单元测试、Prettier、ESLint、两套 TypeScript 检查通过；设置宿主定向回归 1 passed。全量宿主仍有既有 PDF 性能超时与若干 DOM 时序失败，未将其宣称为通过。

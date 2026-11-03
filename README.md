@@ -97,14 +97,14 @@ npm test -- --no-watch --abort-on-fail --exit-on-finish
 npm run build
 ```
 
-构建产物位于 `.scaffold/build/zotero-research-database.xpi`。开发和验收使用 `.scaffold/test` 独立 Zotero Profile 与 Data 目录，不直接在正式文献库上开发。
+构建临时产物位于 `.scaffold/build/zotero-research-database.xpi`；`npm run build` 会自动将可交付 XPI 同步到根目录 `release/zotero-research-database.xpi`。历史 XPI 统一放在 `release/archive/`。开发和验收使用 `.scaffold/test` 独立 Zotero Profile 与 Data 目录，不直接在正式文献库上开发。
 
 2026-11-02 当前验证结果：
 
 - `npm run lint:check`、`npx tsc --noEmit` 与 `git diff --check` 通过。
 - `npm run test:unit`：214 项通过，覆盖 MinerU 共享缓存、OpenAI 兼容 Agent、设置持久化、公式渲染、记录更新与有界缓存。
 - Zotero 10.0.7 隔离运行测试：24 项通过，覆盖原生列表/数据库视图切换、MinerU 产物隐藏/恢复、PDF 缩略图、列宽拖动、集合刷新和记录/产物刷新隔离；未配置的外部服务连通测试保持跳过。
-- `0.3.39` 生产 XPI：`.scaffold/build/zotero-research-database.xpi`，`887,719` 字节，SHA-256 `1B6A2F17ADE2D029B4B6C384B7661C66F8EAFF592C88A1552D9002EF064A2ED2`。
+- `0.3.39` 生产 XPI：`release/zotero-research-database.xpi`，`888,176` 字节，SHA-256 `40E396E177DAF34E04FA9D37EEA5E702BACBA9A263F271559D8B4209D1EA975C`。
 - 尚未做两个已登录配置之间的真实云同步往返；超大集合首次打开和整份 JSON 原子重写仍是后续性能优化重点。
 
 # 安装
@@ -112,10 +112,10 @@ npm run build
 不要把 XPI 直接复制到 Profile 的 `extensions` 目录。请在 Zotero 中打开“工具 → 附加组件”，从齿轮菜单选择“Install Add-on From File…”，然后选择：
 
 ```text
-D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\.scaffold\build\zotero-research-database.xpi
+D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\release\zotero-research-database.xpi
 ```
 
-安装后应在附加组件管理器中看到版本 `0.3.35`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
+安装后应在附加组件管理器中看到版本 `0.3.39`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
 
 # 本地导入接口
 
