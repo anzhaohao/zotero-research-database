@@ -85,18 +85,7 @@ export function createDefaultFields(): FieldDefinition[] {
 
 export function createDefaultLayout(): ViewLayout {
   return {
-    columnOrder: [
-      "pdfPreview",
-      "title",
-      "basicInfo",
-      "figureGallery",
-      "creators",
-      "year",
-      "date",
-      "DOI",
-      "url",
-      "tags",
-    ],
+    columnOrder: ["pdfPreview", "title", "basicInfo", "figureGallery"],
     columnWidths: {
       // Leave enough room for a legible preview; the user can still resize
       // this column per saved view to control the rendered thumbnail size.
@@ -104,12 +93,6 @@ export function createDefaultLayout(): ViewLayout {
       title: 338,
       basicInfo: 374,
       figureGallery: 440,
-      creators: 180,
-      year: 90,
-      date: 130,
-      DOI: 190,
-      url: 240,
-      tags: 180,
     },
     rowHeight: 270,
     rowHeights: {},
@@ -120,8 +103,6 @@ export function createDefaultLayout(): ViewLayout {
       "title",
       "basicInfo",
       "figureGallery",
-      "url",
-      "tags",
       "research-question",
       "research-significance",
       "research-value",

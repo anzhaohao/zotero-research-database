@@ -1,3 +1,28 @@
+import type { SavedView } from "../domain/types";
+
+export function getSharedVisibleColumnIDs(
+  views: readonly SavedView[],
+  fallback: readonly string[],
+): string[] {
+  const source =
+    views.find((view) => view.id === "builtin-table") ||
+    views.find((view) => view.mode === "table");
+  return [...(source?.layout.visibleColumnIDs || fallback)];
+}
+
+export function syncSharedVisibleColumnIDs(
+  views: readonly SavedView[],
+  visibleColumnIDs: readonly string[],
+): SavedView[] {
+  return views.map((view) => ({
+    ...view,
+    layout: {
+      ...view.layout,
+      visibleColumnIDs: [...visibleColumnIDs],
+    },
+  }));
+}
+
 export function partitionPinnedIDs(
   orderedIDs: string[],
   pinnedIDs: string[],

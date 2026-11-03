@@ -148,17 +148,29 @@
 
   <html:div class="zrdb-pref-panel" data-pref-panel="fields" hidden="true">
     <html:div class="zrdb-pref-section">
-      <html:h3>字段定义</html:h3>
+      <html:h3>字段与表格列</html:h3>
       <html:p
-        >在此管理自定义字段、说明和提取提示词；语言与输出格式直接写入提示词。归档字段保留历史值，可以恢复。可直接拖动表格表头调整列顺序，固定位置在表格菜单的“固定列”中设置。</html:p
+        >统一管理所有表格列的显示状态。自定义字段只需填写标题和给 Agent
+        的提示词；所有未删除字段都会参与提取，隐藏不影响提取。删除字段会保留历史值，可在下方恢复。可直接拖动表格表头调整列顺序，固定位置在表格菜单的“固定列”中设置。</html:p
       >
       <html:div id="zrdb-fields-list" class="zrdb-pref-fields"></html:div>
+      <html:details
+        id="zrdb-archived-fields"
+        class="zrdb-pref-advanced"
+        hidden="true"
+      >
+        <html:summary>已删除字段</html:summary>
+        <html:div
+          id="zrdb-archived-fields-list"
+          class="zrdb-pref-archived-fields"
+        ></html:div>
+      </html:details>
       <html:div class="zrdb-pref-inline-actions">
         <html:button type="button" id="zrdb-add-field"
           >添加自定义字段</html:button
         >
         <html:button type="button" id="zrdb-save-fields"
-          >保存字段方案</html:button
+          >保存字段与列设置</html:button
         >
       </html:div>
     </html:div>

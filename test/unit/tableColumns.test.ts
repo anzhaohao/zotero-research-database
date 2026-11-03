@@ -3,6 +3,7 @@ import type { FieldDefinition, ViewLayout } from "../../src/domain/types";
 import {
   buildColumnDefinitions,
   buildVisibleColumns,
+  nativeColumns,
 } from "../../src/ui/features/table/tableColumns";
 
 function field(id: string, name = id, archived = false): FieldDefinition {
@@ -41,6 +42,13 @@ function layout(overrides: Partial<ViewLayout> = {}): ViewLayout {
 }
 
 describe("shared table column model", function () {
+  it("exposes exactly the four supported native columns", function () {
+    assert.deepEqual(
+      nativeColumns.map((column) => column.id),
+      ["pdfPreview", "title", "basicInfo", "figureGallery"],
+    );
+  });
+
   it("filters archived and built-in translated-title fields", function () {
     const columns = buildColumnDefinitions([
       field("translated-title", "中文标题"),
@@ -54,7 +62,7 @@ describe("shared table column model", function () {
     );
   });
 
-  it("applies order, aliases, basic-info collapsing and pinning", function () {
+  it("applies order, aliases and pinning", function () {
     const columns = buildVisibleColumns(
       [field("active", "研究结论")],
       layout({
@@ -72,26 +80,39 @@ describe("shared table column model", function () {
     assert.equal(columns[0].label, "结论别名");
   });
 
-  it("hides individual metadata columns while basic-info is shown", function () {
+  it("never revives removed native metadata columns from an old layout", function () {
     const columns = buildVisibleColumns(
       [],
       layout({
-        visibleColumnIDs: ["basicInfo", "creators", "DOI"],
+        visibleColumnIDs: [
+          "basicInfo",
+          "creators",
+          "year",
+          "date",
+          "DOI",
+          "url",
+          "tags",
+        ],
       }),
     );
 
-    assert.include(
+    assert.deepEqual(
       columns.map((column) => column.id),
-      "basicInfo",
+      ["basicInfo"],
     );
-    assert.notInclude(
-      columns.map((column) => column.id),
-      "creators",
-    );
-    assert.notInclude(
-      columns.map((column) => column.id),
-      "DOI",
-    );
+  });
+
+  it("allows each native column to be hidden independently", function () {
+    for (const native of nativeColumns) {
+      const columns = buildVisibleColumns(
+        [],
+        layout({ visibleColumnIDs: [native.id] }),
+      );
+      assert.deepEqual(
+        columns.map((column) => column.id),
+        [native.id],
+      );
+    }
   });
 
   it("keeps an explicitly empty layout hidden without reviving columns", function () {

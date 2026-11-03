@@ -7,6 +7,9 @@ import {
 } from "../../src/ui/preferencesNavigation";
 import { clickControl } from "../uiHelpers";
 import { DATA_ROOT_SETTINGS, getDataRoot } from "../../src/storage/dataRoot";
+import { TRANSLATED_TITLE_FIELD_ID } from "../../src/domain/defaults";
+import type { WorkspaceState } from "../../src/domain/types";
+import { createEmptyRecord, setManualValue } from "../../src/core/records";
 
 type PrefValue = string | boolean | number;
 type Control = HTMLInputElement | HTMLSelectElement;
@@ -47,9 +50,12 @@ function nativeError(error: unknown, stage: string): Error {
   return result;
 }
 
-async function eventually(check: () => boolean, message: () => string) {
+async function eventually(
+  check: () => boolean | Promise<boolean>,
+  message: () => string,
+) {
   const deadline = Date.now() + 8000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() >= deadline) throw new Error(message());
     await Zotero.Promise.delay(25);
   }
@@ -80,9 +86,38 @@ function control(win: Window, key: string): Control {
 }
 
 async function clickVisible(win: Window, element: HTMLElement) {
-  element.scrollIntoView({ block: "center", inline: "nearest" });
-  await Zotero.Promise.delay(60);
-  clickControl(win as unknown as _ZoteroTypes.MainWindow, element);
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    element.scrollIntoView({ block: "center", inline: "nearest" });
+    await Zotero.Promise.delay(100);
+    const rect = element.getBoundingClientRect();
+    const hit = win.document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    );
+    if (element === hit || element.contains(hit)) {
+      clickControl(win as unknown as _ZoteroTypes.MainWindow, element);
+      return;
+    }
+  }
+  const rect = element.getBoundingClientRect();
+  const hit = win.document.elementFromPoint(
+    rect.left + rect.width / 2,
+    rect.top + rect.height / 2,
+  );
+  throw new Error(
+    `control ${element.id || element.className} remained unclickable; ` +
+      JSON.stringify({
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        },
+        viewport: { width: win.innerWidth, height: win.innerHeight },
+        hit: hit?.id || hit?.className || hit?.localName,
+      }),
+  );
 }
 
 async function closePreferences(win: Window | undefined) {
@@ -144,6 +179,18 @@ describe("preferences persistence in the real Zotero settings window", function 
     let win: Window | undefined;
     let stage = "initialization";
     let failure: Error | undefined;
+    // Exercise the same repository and local-data module cache as the loaded
+    // plugin. A separately bundled repository would overwrite item history
+    // with its own stale workspace snapshot during these cross-window checks.
+    const controller = (
+      Zotero[config.addonInstance] as any
+    ).data.controllers.get(Zotero.getMainWindow());
+    const repository = controller.repository as ResearchRepository;
+    let originalWorkspace: WorkspaceState | undefined;
+    let workspaceTouched = false;
+    let historyItem: Zotero.Item | undefined;
+    let testFieldID: string | undefined;
+    let titleInitiallyVisible: boolean | undefined;
     const windowErrors: string[] = [];
     const trackedWindows = new Set<Window>();
     const onWindowError = (event: Event) => {
@@ -390,26 +437,53 @@ describe("preferences persistence in the real Zotero settings window", function 
         else
           assert.equal(element.value, String(value), key + " restored value");
       }
-      const workspace = await new ResearchRepository().loadWorkspace();
+      const workspace = await repository.loadWorkspace();
+      originalWorkspace = JSON.parse(
+        JSON.stringify(workspace),
+      ) as WorkspaceState;
+      const editableFields = workspace.fields.filter(
+        (field) => !field.archived && field.id !== TRANSLATED_TITLE_FIELD_ID,
+      );
       await open("fields");
       stage = "wait for field editor initialization";
       await eventually(
         () =>
           win!.document.querySelectorAll("#zrdb-fields-list .zrdb-pref-field")
-            .length === workspace.fields.length,
+            .length === editableFields.length,
         () => "field rows did not initialize; " + windowDiagnostics(win),
       );
+      const nativeRows = [
+        ...win!.document.querySelectorAll<HTMLElement>(
+          "#zrdb-fields-list .zrdb-pref-native-column",
+        ),
+      ];
+      assert.deepEqual(
+        nativeRows.map((row) => row.dataset.columnId),
+        ["pdfPreview", "title", "basicInfo", "figureGallery"],
+      );
+      for (const row of nativeRows) {
+        assert.exists(
+          row.querySelector('input[type="checkbox"][data-column-visibility]'),
+        );
+        assert.notExists(row.querySelector("textarea, button, select"));
+      }
       const rows = [
         ...win!.document.querySelectorAll<HTMLElement>(
           "#zrdb-fields-list .zrdb-pref-field",
         ),
       ];
-      for (const [index, field] of workspace.fields.entries()) {
+      for (const [index, field] of editableFields.entries()) {
         const name = rows[index].querySelector<HTMLInputElement>(
-          'input[placeholder="字段名称"]',
+          'input[placeholder="自定义标题"]',
         );
         assert.exists(name, field.id + " field name editor");
         assert.equal(name!.value, field.name);
+        assert.exists(
+          rows[index].querySelector('textarea[aria-label="给 Agent 的提示词"]'),
+        );
+        assert.exists(rows[index].querySelector(".zrdb-field-delete"));
+        assert.notExists(rows[index].querySelector("select"));
+        assert.equal(rows[index].querySelectorAll("input").length, 2);
       }
       stage = "repeat opening fields without duplicating controller bindings";
       assert.strictEqual(await open("fields"), reopened);
@@ -423,8 +497,179 @@ describe("preferences persistence in the real Zotero settings window", function 
       assert.equal(
         win!.document.querySelectorAll("#zrdb-fields-list .zrdb-pref-field")
           .length,
-        workspace.fields.length + 1,
+        editableFields.length + 1,
         "one click adds one unsaved field after repeated opening",
+      );
+      const addedRow = win!.document.querySelector<HTMLElement>(
+        "#zrdb-fields-list .zrdb-pref-field:last-child",
+      );
+      assert.exists(addedRow);
+      const addedFieldID = addedRow!.dataset.fieldId!;
+      testFieldID = addedFieldID;
+      const remove = addedRow!.querySelector<HTMLElement>(".zrdb-field-delete");
+      assert.exists(remove);
+      await clickVisible(win!, remove!);
+      const archived = win!.document.getElementById(
+        "zrdb-archived-fields",
+      ) as HTMLDetailsElement;
+      assert.equal(archived.hidden, false);
+      const summary = archived.querySelector<HTMLElement>("summary");
+      assert.exists(summary);
+      await clickVisible(win!, summary!);
+      assert.equal(archived.open, true);
+      const restore = archived.querySelector<HTMLElement>(
+        `[data-field-id="${addedFieldID}"] .zrdb-field-restore`,
+      );
+      assert.exists(restore);
+      await clickVisible(win!, restore!);
+      assert.equal(
+        win!.document.querySelectorAll("#zrdb-fields-list .zrdb-pref-field")
+          .length,
+        editableFields.length + 1,
+        "restoring returns the field without clearing its historical values",
+      );
+      assert.equal(
+        win!.document.querySelector<HTMLElement>(
+          "#zrdb-fields-list .zrdb-pref-field:last-child",
+        )?.dataset.fieldId,
+        addedFieldID,
+      );
+
+      stage = "edit and save shared column visibility";
+      const restoredRow = win!.document.querySelector<HTMLElement>(
+        `#zrdb-fields-list [data-field-id="${addedFieldID}"]`,
+      );
+      assert.exists(restoredRow);
+      const titleInput = restoredRow!.querySelector<HTMLInputElement>(
+        'input[placeholder="自定义标题"]',
+      );
+      const promptInput = restoredRow!.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="给 Agent 的提示词"]',
+      );
+      assert.exists(titleInput);
+      assert.exists(promptInput);
+      titleInput!.value = "集成测试字段";
+      titleInput!.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      promptInput!.value = "提取用于集成测试的内容";
+      promptInput!.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      for (const id of ["title", addedFieldID]) {
+        const visibility = win!.document.querySelector<HTMLInputElement>(
+          `#zrdb-fields-list input[data-column-visibility="${id}"]`,
+        );
+        assert.exists(visibility);
+        if (id === "title") titleInitiallyVisible = visibility!.checked;
+        if (visibility!.checked) await clickVisible(win!, visibility!);
+      }
+      const saveFields = win!.document.getElementById(
+        "zrdb-save-fields",
+      ) as HTMLElement;
+      assert.exists(saveFields);
+      workspaceTouched = true;
+      await clickVisible(win!, saveFields);
+      await eventually(
+        async () => {
+          const saved = await repository.loadWorkspace();
+          return saved.fields.some((field) => field.id === addedFieldID);
+        },
+        () => "field and column settings were not saved",
+      );
+      const saved = await repository.loadWorkspace();
+      const savedField = saved.fields.find(
+        (field) => field.id === addedFieldID,
+      );
+      assert.exists(savedField);
+      assert.equal(savedField!.name, "集成测试字段");
+      assert.equal(
+        savedField!.extraction.instruction,
+        "提取用于集成测试的内容",
+      );
+      assert.equal(savedField!.extraction.enabled, true);
+      assert.isNotEmpty(saved.views);
+      for (const view of saved.views) {
+        assert.deepEqual(
+          view.layout.visibleColumnIDs,
+          saved.views[0].layout.visibleColumnIDs,
+          `${view.id} uses shared visibility`,
+        );
+        assert.notInclude(view.layout.visibleColumnIDs, "title");
+        assert.notInclude(view.layout.visibleColumnIDs, addedFieldID);
+      }
+      for (const field of saved.fields.filter((field) => !field.archived))
+        assert.equal(field.extraction.enabled, true, `${field.id} extraction`);
+
+      stage = "archive and restore a saved field without losing history";
+      historyItem = new Zotero.Item("journalArticle");
+      historyItem.libraryID = Zotero.Libraries.userLibraryID;
+      historyItem.setField("title", "ZRDB field archive history test");
+      await historyItem.saveTx();
+      await repository.saveRecord(
+        historyItem,
+        setManualValue(
+          createEmptyRecord(historyItem.libraryID, historyItem.key),
+          addedFieldID,
+          "归档后仍需保留",
+        ),
+        saved.fields,
+      );
+      const savedRow = win!.document.querySelector<HTMLElement>(
+        `#zrdb-fields-list [data-field-id="${addedFieldID}"]`,
+      );
+      await clickVisible(
+        win!,
+        savedRow!.querySelector<HTMLElement>(".zrdb-field-delete")!,
+      );
+      await clickVisible(win!, saveFields);
+      await eventually(
+        async () =>
+          Boolean(
+            (await repository.loadWorkspace()).fields.find(
+              (field) => field.id === addedFieldID,
+            )?.archived,
+          ),
+        () => "archived field state was not saved",
+      );
+      assert.equal(
+        (await repository.loadRecord(historyItem))?.fields[addedFieldID]?.value,
+        "归档后仍需保留",
+      );
+
+      const savedArchive = win!.document.getElementById(
+        "zrdb-archived-fields",
+      ) as HTMLDetailsElement;
+      if (!savedArchive.open) {
+        await clickVisible(win!, savedArchive.querySelector("summary")!);
+      }
+      await clickVisible(
+        win!,
+        savedArchive.querySelector<HTMLElement>(
+          `[data-field-id="${addedFieldID}"] .zrdb-field-restore`,
+        )!,
+      );
+      await clickVisible(win!, saveFields);
+      await eventually(
+        async () =>
+          !(await repository.loadWorkspace()).fields.find(
+            (field) => field.id === addedFieldID,
+          )?.archived,
+        () => "restored field state was not saved",
+      );
+      const restored = await repository.loadWorkspace();
+      const restoredField = restored.fields.find(
+        (field) => field.id === addedFieldID,
+      );
+      assert.equal(restoredField?.name, "集成测试字段");
+      assert.equal(
+        restoredField?.extraction.instruction,
+        "提取用于集成测试的内容",
+      );
+      assert.notInclude(
+        restored.views[0].layout.visibleColumnIDs,
+        addedFieldID,
+        "restoring preserves the hidden state",
+      );
+      assert.equal(
+        (await repository.loadRecord(historyItem))?.fields[addedFieldID]?.value,
+        "归档后仍需保留",
       );
     } catch (error) {
       const candidate =
@@ -434,6 +679,56 @@ describe("preferences persistence in the real Zotero settings window", function 
         failure.message += "\n" + windowErrors.join("\n");
     }
     if (isolated) {
+      if (workspaceTouched && win && !win.closed) {
+        try {
+          await open("fields");
+          if (titleInitiallyVisible !== undefined) {
+            const titleVisibility =
+              win.document.querySelector<HTMLInputElement>(
+                '#zrdb-fields-list input[data-column-visibility="title"]',
+              );
+            if (
+              titleVisibility &&
+              titleVisibility.checked !== titleInitiallyVisible
+            )
+              await clickVisible(win, titleVisibility);
+          }
+          if (testFieldID) {
+            const testRow = win.document.querySelector<HTMLElement>(
+              `#zrdb-fields-list [data-field-id="${testFieldID}"]`,
+            );
+            const remove =
+              testRow?.querySelector<HTMLElement>(".zrdb-field-delete");
+            if (remove) await clickVisible(win, remove);
+          }
+          const cleanupSave = win.document.getElementById(
+            "zrdb-save-fields",
+          ) as HTMLElement | null;
+          if (cleanupSave) await clickVisible(win, cleanupSave);
+          await eventually(
+            async () => {
+              const current = await repository.loadWorkspace();
+              const testField = current.fields.find(
+                (field) => field.id === testFieldID,
+              );
+              return (
+                (!testField || testField.archived) &&
+                (titleInitiallyVisible === undefined ||
+                  current.views.every((view) =>
+                    titleInitiallyVisible
+                      ? view.layout.visibleColumnIDs.includes("title")
+                      : !view.layout.visibleColumnIDs.includes("title"),
+                  ))
+              );
+            },
+            () => "live field and column state was not restored",
+          );
+        } catch (error) {
+          const cleanup = nativeError(error, "restore live field controls");
+          if (failure) failure.message += "\n" + cleanup.message;
+          else failure = cleanup;
+        }
+      }
       try {
         for (const tracked of trackedWindows)
           if (!tracked.closed)
@@ -453,6 +748,15 @@ describe("preferences persistence in the real Zotero settings window", function 
           if (failure) failure.message += "\n" + cleanup.message;
           else failure = cleanup;
         }
+      }
+      try {
+        if (workspaceTouched && originalWorkspace)
+          await repository.saveWorkspace(originalWorkspace);
+        if (historyItem?.id) await historyItem.eraseTx();
+      } catch (error) {
+        const cleanup = nativeError(error, "restore isolated workspace");
+        if (failure) failure.message += "\n" + cleanup.message;
+        else failure = cleanup;
       }
     }
     if (failure) throw failure;

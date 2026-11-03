@@ -16,12 +16,6 @@ export const nativeColumns: readonly ColumnDefinition[] = [
   { id: "title", label: "标题", nativeField: "title" },
   { id: "basicInfo", label: "基础信息", kind: "basicInfo" },
   { id: "figureGallery", label: "论文图表", kind: "figureGallery" },
-  { id: "creators", label: "作者" },
-  { id: "year", label: "年份" },
-  { id: "date", label: "日期", nativeField: "date" },
-  { id: "DOI", label: "DOI", nativeField: "DOI" },
-  { id: "url", label: "URL", nativeField: "url" },
-  { id: "tags", label: "标签", nativeField: "tags" },
 ];
 
 export function buildColumnDefinitions(
@@ -44,15 +38,11 @@ export function buildVisibleColumns(
   const all = buildColumnDefinitions(fields);
   const order = [...layout.columnOrder, ...all.map((column) => column.id)];
   const visible = new Set(layout.visibleColumnIDs || []);
-  const showsBasicInfo = visible.has("basicInfo");
-  const combinedMetadata = new Set(["creators", "year", "date", "DOI"]);
   const ordered = [...new Set(order)]
     .map((id) => all.find((column) => column.id === id))
-    .filter((column): column is ColumnDefinition => {
-      if (!column) return false;
-      if (showsBasicInfo && combinedMetadata.has(column.id)) return false;
-      return visible.has(column.id);
-    })
+    .filter((column): column is ColumnDefinition =>
+      Boolean(column && visible.has(column.id)),
+    )
     .map((column) => ({
       ...column,
       label: layout.columnLabels[column.id] || column.label,

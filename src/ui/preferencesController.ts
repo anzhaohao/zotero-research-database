@@ -1,9 +1,14 @@
-import { createID } from "../domain/defaults";
-import type {
-  FieldDefinition,
-  FieldType,
-  WorkspaceState,
-} from "../domain/types";
+import {
+  createDefaultLayout,
+  createID,
+  TRANSLATED_TITLE_FIELD_ID,
+} from "../domain/defaults";
+import type { FieldDefinition, WorkspaceState } from "../domain/types";
+import {
+  getSharedVisibleColumnIDs,
+  syncSharedVisibleColumnIDs,
+} from "../core/viewLayout";
+import { nativeColumns } from "./features/table/tableColumns";
 import {
   createAgentBridge,
   listOpenAICompatibleModels,
@@ -91,18 +96,6 @@ const prefKeys = [
   "mineruReuseLlmForZoteroCache",
 ] as const;
 
-const fieldTypes: Array<[FieldType, string]> = [
-  ["text", "短文本"],
-  ["longText", "长文本"],
-  ["select", "单选"],
-  ["multiSelect", "多选"],
-  ["number", "数值"],
-  ["date", "日期"],
-  ["checkbox", "勾选"],
-  ["rating", "评分"],
-  ["url", "URL"],
-];
-
 function cloneFields(fields: FieldDefinition[]): FieldDefinition[] {
   return JSON.parse(JSON.stringify(fields)) as FieldDefinition[];
 }
@@ -125,6 +118,7 @@ export class PreferencesController {
   private repository = new ResearchRepository();
   private workspace?: WorkspaceState;
   private fields: FieldDefinition[] = [];
+  private visibleColumnIDs: string[] = [];
   private root?: HTMLElement;
   private savingLocalSettings = false;
   private agentTesting = false;
@@ -149,6 +143,20 @@ export class PreferencesController {
     this.updateModeVisibility();
     this.workspace = await this.repository.loadWorkspace();
     this.fields = cloneFields(this.workspace.fields);
+    this.visibleColumnIDs = getSharedVisibleColumnIDs(
+      this.workspace.views,
+      createDefaultLayout().visibleColumnIDs,
+    );
+    if (!this.workspace.views.length) {
+      this.visibleColumnIDs = [
+        ...new Set([
+          ...this.visibleColumnIDs,
+          ...this.fields
+            .filter((field) => !field.archived)
+            .map((field) => field.id),
+        ]),
+      ];
+    }
     this.renderFields();
     this.bindWorkspaceActions();
   }
@@ -791,75 +799,99 @@ export class PreferencesController {
       this.root?.querySelector<HTMLElement>("#zrdb-fields-list");
     if (!container) return;
     container.replaceChildren();
-    for (const field of this.fields)
+    for (const column of nativeColumns)
+      container.append(this.createNativeColumnRow(column.id, column.label));
+    for (const field of this.fields.filter(
+      (field) => !field.archived && field.id !== TRANSLATED_TITLE_FIELD_ID,
+    ))
       container.append(this.createFieldRow(field));
+    this.renderArchivedFields();
+  }
+
+  private createNativeColumnRow(id: string, label: string): HTMLElement {
+    const row = this.win.document.createElement("div");
+    row.className = "zrdb-pref-native-column";
+    row.dataset.columnId = id;
+    const name = this.win.document.createElement("strong");
+    name.textContent = label;
+    row.append(name, this.createVisibilityControl(id));
+    return row;
+  }
+
+  private createVisibilityControl(id: string): HTMLLabelElement {
+    const label = this.win.document.createElement("label");
+    label.className = "zrdb-pref-visibility";
+    const checkbox = this.win.document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.columnVisibility = id;
+    checkbox.checked = this.visibleColumnIDs.includes(id);
+    checkbox.addEventListener("change", () => {
+      const visible = new Set(this.visibleColumnIDs);
+      if (checkbox.checked) visible.add(id);
+      else visible.delete(id);
+      this.visibleColumnIDs = [...visible];
+    });
+    label.append(checkbox, this.win.document.createTextNode(" 显示"));
+    return label;
   }
 
   private createFieldRow(field: FieldDefinition): HTMLElement {
     const row = this.win.document.createElement("div");
-    row.className = `zrdb-pref-field${field.archived ? " is-archived" : ""}`;
-    const name = this.textInput(field.name, "字段名称", (value) => {
+    row.className = "zrdb-pref-field";
+    row.dataset.fieldId = field.id;
+    const name = this.textInput(field.name, "自定义标题", (value) => {
       field.name = value;
     });
-    const type = this.win.document.createElement("select");
-    for (const [value, label] of fieldTypes) {
-      const option = this.win.document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      type.append(option);
-    }
-    type.value = field.type;
-    type.addEventListener("change", () => {
-      field.type = type.value as FieldType;
-      this.renderFields();
-    });
-    const description = this.textInput(
-      field.description,
-      "字段说明",
-      (value) => {
-        field.description = value;
-      },
-    );
     const prompt = this.win.document.createElement("textarea");
     prompt.placeholder = "给 Agent 的提取提示词";
+    prompt.setAttribute("aria-label", "给 Agent 的提示词");
     prompt.value = field.extraction.instruction;
     prompt.addEventListener("change", () => {
       field.extraction.instruction = prompt.value;
       field.extraction.templateVersion += 1;
     });
-    const enabledLabel = this.win.document.createElement("label");
-    const enabled = this.win.document.createElement("input");
-    enabled.type = "checkbox";
-    enabled.checked = field.extraction.enabled;
-    enabled.addEventListener("change", () => {
-      field.extraction.enabled = enabled.checked;
-    });
-    enabledLabel.append(
-      enabled,
-      this.win.document.createTextNode(" 参与 Agent 提取"),
-    );
-    const options = this.textInput(
-      field.options.join("，"),
-      "选项（逗号分隔）",
-      (value) => {
-        field.options = value
-          .split(/[，,]/)
-          .map((entry) => entry.trim())
-          .filter(Boolean);
-      },
-    );
-    options.hidden = !["select", "multiSelect"].includes(field.type);
     const archive = this.win.document.createElement("button");
     archive.type = "button";
-    archive.textContent = field.archived ? "恢复" : "归档";
+    archive.className = "zrdb-field-delete";
+    archive.textContent = "删除";
     archive.addEventListener("click", () => {
-      field.archived = !field.archived;
+      field.archived = true;
       this.renderFields();
     });
-    for (const control of [name, type, description, prompt, enabled, options])
-      control.disabled = Boolean(field.archived);
-    row.append(name, type, description, prompt, enabledLabel, options, archive);
+    row.append(name, this.createVisibilityControl(field.id), archive, prompt);
     return row;
+  }
+
+  private renderArchivedFields(): void {
+    const details = this.root?.querySelector<HTMLDetailsElement>(
+      "#zrdb-archived-fields",
+    );
+    const container = this.root?.querySelector<HTMLElement>(
+      "#zrdb-archived-fields-list",
+    );
+    if (!details || !container) return;
+    const archived = this.fields.filter(
+      (field) => field.archived && field.id !== TRANSLATED_TITLE_FIELD_ID,
+    );
+    details.hidden = archived.length === 0;
+    container.replaceChildren();
+    for (const field of archived) {
+      const row = this.win.document.createElement("div");
+      row.className = "zrdb-pref-archived-field";
+      row.dataset.fieldId = field.id;
+      const name = this.win.document.createElement("span");
+      name.textContent = field.name;
+      const restore = this.win.document.createElement("button");
+      restore.type = "button";
+      restore.className = "zrdb-field-restore";
+      restore.textContent = "恢复";
+      restore.addEventListener("click", () => {
+        field.archived = false;
+        this.renderFields();
+      });
+      row.append(name, restore);
+      container.append(row);
+    }
   }
 
   private textInput(
@@ -886,11 +918,12 @@ export class PreferencesController {
           type: "text",
           options: [],
           extraction: {
-            enabled: false,
+            enabled: true,
             instruction: "",
             templateVersion: 1,
           },
         });
+        this.visibleColumnIDs.push(this.fields.at(-1)!.id);
         this.renderFields();
       });
     this.root
@@ -910,10 +943,39 @@ export class PreferencesController {
     try {
       // The table may have saved a layout while preferences remained open.
       const latest = await this.repository.loadWorkspace();
-      const next = { ...latest, fields: cloneFields(this.fields) };
+      const fields = cloneFields(this.fields).map((field) =>
+        field.archived
+          ? field
+          : {
+              ...field,
+              extraction: { ...field.extraction, enabled: true },
+            },
+      );
+      let views = syncSharedVisibleColumnIDs(
+        latest.views,
+        this.visibleColumnIDs,
+      );
+      if (!views.length) {
+        const now = new Date().toISOString();
+        views = [
+          {
+            id: "builtin-table",
+            name: "默认表格",
+            mode: "table",
+            filterText: "",
+            layout: {
+              ...createDefaultLayout(),
+              visibleColumnIDs: [...this.visibleColumnIDs],
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
+        ];
+      }
+      const next: WorkspaceState = { ...latest, fields, views };
       await this.repository.saveWorkspace(next);
       this.workspace = next;
-      this.status("字段方案已保存到本机研究数据库");
+      this.status("字段与列设置已保存到本机研究数据库");
     } catch (error) {
       this.status(error instanceof Error ? error.message : String(error));
     }

@@ -62,7 +62,7 @@ export class ExternalAgentExtractionService {
       let fieldIDs = workspace.fields
         .filter(
           (field) =>
-            field.extraction.enabled &&
+            !field.archived &&
             (!requestedFieldIDs || requestedFieldIDs.has(field.id)),
         )
         .map((field) => field.id);
@@ -433,7 +433,6 @@ function eligibleFields(
 ): FieldDefinition[] {
   return fields.filter(
     (field) =>
-      field.extraction.enabled &&
       !field.archived &&
       (!requestedFieldIDs || requestedFieldIDs.has(field.id)) &&
       (overwriteLockedFields || !record.fields[field.id]?.locked),

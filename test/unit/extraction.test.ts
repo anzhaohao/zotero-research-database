@@ -1,6 +1,9 @@
 import { expect } from "chai";
 import { createEmptyRecord, setManualValue } from "../../src/core/records";
-import { createDefaultWorkspace } from "../../src/domain/defaults";
+import {
+  createDefaultLayout,
+  createDefaultWorkspace,
+} from "../../src/domain/defaults";
 import type { SourceText } from "../../src/domain/types";
 import {
   ExternalAgentExtractionService,
@@ -144,6 +147,65 @@ describe("external Agent extraction", function () {
     expect(saved.fields).not.to.have.property("research-question");
   });
 
+  it("extracts every visible or hidden active field and skips archived fields", async function () {
+    const workspace = createDefaultWorkspace();
+    workspace.views = [
+      {
+        id: "builtin-table",
+        name: "默认表格",
+        mode: "table",
+        filterText: "",
+        layout: { ...createDefaultLayout(), visibleColumnIDs: [] },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    for (const field of workspace.fields) field.extraction.enabled = false;
+    workspace.fields.find((field) => field.id === "research-value")!.archived =
+      true;
+    const record = createEmptyRecord(1, "ITEM0006");
+    const repository = {
+      loadRecord: async () => record,
+      saveRecord: async () => undefined,
+    } as unknown as ResearchRepository;
+    let requested: string[] = [];
+    const agent = {
+      kind: "codex-cli",
+      cancel() {},
+      probe: async () => ({ executable: "codex", version: "test" }),
+      testStructuredOutput: async () => undefined,
+      extractFields: async (fields: typeof workspace.fields) => {
+        requested = fields.map((field) => field.id);
+        return { value: {}, executorVersion: "test" };
+      },
+      synthesizeComparison: async () => ({ value: "", executorVersion: "" }),
+    } satisfies AgentBridge;
+    const service = new ExternalAgentExtractionService(
+      repository,
+      agent,
+      async () => ({
+        type: "pdf-fulltext",
+        text: "paper",
+        hash: "hash",
+        attachmentID: 2,
+      }),
+    );
+
+    await service.run(
+      [{ key: "ITEM0006" } as Zotero.Item],
+      workspace,
+      () => undefined,
+    );
+
+    expect(requested).to.deep.equal([
+      "research-question",
+      "research-significance",
+      "research-outcomes",
+      "translated-title",
+    ]);
+    expect(requested).not.to.include("research-value");
+  });
+
   it("merges Agent output into the latest record under the repository lock", async function () {
     const workspace = createDefaultWorkspace();
     const initial = createEmptyRecord(1, "ITEM0004");
@@ -199,6 +261,10 @@ describe("external Agent extraction", function () {
 
   it("regenerates only the requested cell and overwrites its manual value", async function () {
     const workspace = createDefaultWorkspace();
+    workspace.fields.find(
+      (field) => field.id === "research-question",
+    )!.extraction.enabled = false;
+    for (const view of workspace.views) view.layout.visibleColumnIDs = [];
     let record = setManualValue(
       createEmptyRecord(1, "ITEM0005"),
       "research-question",

@@ -22,7 +22,10 @@ import type {
   WorkspaceState,
 } from "../domain/types";
 import { createEmptyRecord, setManualValue } from "../core/records";
-import { togglePinnedColumnIDs } from "../core/viewLayout";
+import {
+  getSharedVisibleColumnIDs,
+  togglePinnedColumnIDs,
+} from "../core/viewLayout";
 import {
   ResearchRepository,
   type EditableNativeField,
@@ -184,15 +187,23 @@ export function ResearchDatabaseApp(props: Props) {
       (view) => view.id === activeViewID && view.mode === props.mode,
     ) || workspace?.views.find((view) => view.id === builtinViewID);
   const layout = normalizeViewLayout(currentView?.layout);
-  if (!currentView) {
+  if (!currentView && !workspace?.views.length) {
     layout.visibleColumnIDs = [
-      ...layout.visibleColumnIDs,
-      ...(workspace?.fields || [])
-        .filter((field) => !field.archived)
-        .map((field) => field.id),
+      ...new Set([
+        ...layout.visibleColumnIDs,
+        ...(workspace?.fields || [])
+          .filter((field) => !field.archived)
+          .map((field) => field.id),
+      ]),
     ];
     const configuredHeight = Number(getPref("defaultRowHeight"));
     if (configuredHeight >= 32) layout.rowHeight = configuredHeight;
+  }
+  if (workspace?.views.length) {
+    layout.visibleColumnIDs = getSharedVisibleColumnIDs(
+      workspace.views,
+      layout.visibleColumnIDs,
+    );
   }
   useEffect(() => {
     if (!workspace) return;
@@ -282,7 +293,10 @@ export function ResearchDatabaseApp(props: Props) {
 
   const resetCurrentViewLayout = async () => {
     await patchCurrentView({
-      layout: createDefaultLayout(),
+      layout: {
+        ...createDefaultLayout(),
+        visibleColumnIDs: [...layout.visibleColumnIDs],
+      },
       figureKinds: undefined,
     });
   };

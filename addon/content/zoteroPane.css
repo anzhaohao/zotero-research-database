@@ -1599,7 +1599,7 @@ button.zrdb-view-toggle:active {
 
 .zrdb-pref-native-column {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(110px, 0.7fr) auto;
+  grid-template-columns: minmax(140px, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -1607,15 +1607,23 @@ button.zrdb-view-toggle:active {
   background: color-mix(in srgb, Canvas 96%, CanvasText);
 }
 
-.zrdb-pref-native-column span,
-.zrdb-pref-native-column code {
-  color: GrayText;
-  font-size: 11px;
+.zrdb-pref-visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.zrdb-pref-visibility input {
+  width: auto;
+  min-width: auto;
+  margin: 0;
 }
 
 .zrdb-pref-field {
   display: grid;
-  grid-template-columns: minmax(120px, 0.8fr) 105px minmax(160px, 1fr) auto;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  align-items: center;
   gap: 7px;
   padding: 9px;
   border: 1px solid var(--zrdb-line);
@@ -1624,13 +1632,25 @@ button.zrdb-view-toggle:active {
 }
 
 .zrdb-pref-field textarea {
-  grid-column: 1 / span 3;
+  grid-column: 1 / -1;
   min-height: 56px;
   resize: vertical;
 }
 
-.zrdb-pref-field.is-archived {
-  opacity: 0.58;
+.zrdb-pref-archived-fields {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.zrdb-pref-archived-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--zrdb-line);
+  border-radius: 5px;
 }
 
 .zrdb-pref-field input,
