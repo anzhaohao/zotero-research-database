@@ -44,6 +44,13 @@ export default defineConfig({
         },
         bundle: true,
         target: "firefox115",
+        alias: {
+          // The bootstrap scope has no DOM. Force the portable decoder instead
+          // of its browser export, which touches document during module init.
+          "decode-named-character-reference": resolve(
+            "node_modules/decode-named-character-reference/index.js",
+          ),
+        },
         outfile: `.scaffold/build/addon/content/scripts/${pkg.config.addonRef}.js`,
       },
     ],

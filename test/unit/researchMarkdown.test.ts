@@ -51,4 +51,21 @@ describe("restricted research Markdown rendering", function () {
     expect(html).to.include('class="zrdb-research-nowrap">−20 dB</span>');
     expect(html).to.include('class="zrdb-research-nowrap">598～945 nm</span>');
   });
+
+  it("keeps a short Chinese lead-in with a spaced measurement", function () {
+    const html = render(
+      "稳定性优于 0.3%；Fig. 4 重建出 11.8 fs，总效率约 76.5%。",
+      "结果与证据",
+    );
+    expect(html).to.include(
+      'class="zrdb-research-nowrap">稳定性优于 0.3%</span>',
+    );
+    expect(html).to.include(
+      'class="zrdb-research-nowrap">重建出 11.8 fs</span>',
+    );
+    expect(html).to.include(
+      'class="zrdb-research-nowrap">总效率约 76.5%</span>',
+    );
+    expect(html).not.to.include("<ol");
+  });
 });
