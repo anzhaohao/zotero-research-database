@@ -1,40 +1,11 @@
 import React, { useRef } from "react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
-import { researchDisplayBlocks } from "../../../core/researchText";
 import { getPref } from "../../../utils/prefs";
 
 gsap.registerPlugin(useGSAP);
 
-export function ResearchTextValue({
-  value,
-  fieldName,
-}: {
-  value: unknown;
-  fieldName: string;
-}) {
-  const blocks = researchDisplayBlocks(value, fieldName);
-  if (!blocks.length) return <span className="zrdb-empty-value">—</span>;
-  return (
-    <div className="zrdb-research-text">
-      {blocks.map((block, index) => (
-        <div
-          className={`zrdb-research-block is-${block.kind}`}
-          key={`${block.kind}-${index}`}
-        >
-          {block.kind === "bullet" && (
-            <span className="zrdb-research-marker">{block.marker}</span>
-          )}
-          <span>
-            {block.label && <strong>{block.label}</strong>}
-            {block.label && "："}
-            {block.text}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
+export { ResearchTextValue } from "./ResearchTextValue";
 
 export function prefersReducedMotion(element: Element | null): boolean {
   if (getPref("motionEnabled") === false) return true;

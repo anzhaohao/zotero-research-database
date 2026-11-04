@@ -15,6 +15,7 @@ import { type EditableNativeField } from "../../../storage/repository";
 import { type ExtractionProgress } from "../../../services/extraction";
 import { resolvePrimaryPdf } from "../../../services/primaryPdf";
 import { copyPlainText } from "../../../services/clipboard";
+import { researchMarkdownSource } from "../../../core/researchText";
 import { TableFlatRowsCache, type TableFlatRow } from "./tableRows";
 import { nativeColumns, type ColumnDefinition } from "./tableColumns";
 import { type FigureRecord } from "../figures/figureRecords";
@@ -34,6 +35,8 @@ import { PdfPreview } from "../pdf/PdfPreview";
 import { FigureGallery } from "../figures/FigureGallery";
 import { InlineCellEditor, TitleCell, BasicInfoCell } from "./TableCells";
 import { CellAgentStatus } from "../agent/ProgressBar";
+
+const EMPTY_RESEARCH_ROW_HEIGHT = 208;
 
 export function TableView(props: {
   items: Zotero.Item[];
@@ -91,6 +94,25 @@ export function TableView(props: {
   const dragCleanupRef = useRef<(() => void) | undefined>(undefined);
   const shownLayout = draftLayout || props.layout;
   const columns = useColumns(props.fields, shownLayout);
+  const rowHeightForItem = (item: Zotero.Item) => {
+    const customHeight = shownLayout.rowHeights[item.key];
+    if (customHeight) return customHeight;
+    const record = props.records.get(item.key);
+    const hasResearchContent = columns.some((column) => {
+      if (column.kind === "pdfPreview") return true;
+      if (column.kind === "figureGallery") {
+        return Boolean(props.figures.get(item.key)?.length);
+      }
+      if (!column.field) return false;
+      const value = record?.fields[column.field.id]?.value;
+      return column.field.type === "longText"
+        ? Boolean(researchMarkdownSource(value, column.field.name))
+        : Boolean(displayValue(value));
+    });
+    return hasResearchContent
+      ? shownLayout.rowHeight
+      : Math.min(shownLayout.rowHeight, EMPTY_RESEARCH_ROW_HEIGHT);
+  };
   const columnWidth = (columnID: string) =>
     shownLayout.columnWidths[columnID] || (columnID === "title" ? 320 : 180);
   const tableWidth = columns.reduce(
@@ -120,14 +142,21 @@ export function TableView(props: {
     estimateSize: (index) => {
       const row = flatRows[index];
       if (!row || row.type === "group") return 34;
-      return shownLayout.rowHeights[row.item.key] || shownLayout.rowHeight;
+      return rowHeightForItem(row.item);
     },
     overscan: 8,
   });
   const storedRowHeightSignature = JSON.stringify(props.layout.rowHeights);
   useEffect(() => {
     virtualizer.measure();
-  }, [props.layout.rowHeight, storedRowHeightSignature, virtualizer]);
+  }, [
+    props.layout.rowHeight,
+    storedRowHeightSignature,
+    props.records,
+    props.figures,
+    props.fields,
+    virtualizer,
+  ]);
 
   useEffect(
     () => () => {
@@ -477,8 +506,7 @@ export function TableView(props: {
               );
             }
             const item = entry.item;
-            const rowHeight =
-              shownLayout.rowHeights[item.key] || shownLayout.rowHeight;
+            const rowHeight = rowHeightForItem(item);
             return (
               <div
                 key={item.key}
