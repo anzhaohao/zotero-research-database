@@ -2,7 +2,10 @@ import { z } from "zod";
 import {
   BUILTIN_FIELD_PROMPTS,
   LEGACY_BUILTIN_FIELD_PROMPTS,
+  LEGACY_READING_FIELD_PROMPTS,
+  READING_FIELD_PROMPTS,
   RECORD_NOTE_MARKER,
+  STRUCTURED_BUILTIN_FIELD_PROMPTS,
   TRANSLATED_TITLE_FIELD_ID,
   WORKSPACE_NOTE_MARKER,
   createDefaultFields,
@@ -117,7 +120,7 @@ export function buildWorkspaceNote(state: WorkspaceState): string {
 export function parseWorkspacePayload(payload: unknown): WorkspaceState {
   const parsed = workspaceSchema.parse(payload);
   const fields = parsed.fields.map(normalizeFieldDefinition);
-  if (parsed.schemaVersion === 10) migrateUntouchedBuiltinPrompts(fields);
+  migrateUntouchedFieldPrompts(fields);
   if (!fields.some((field) => field.id === TRANSLATED_TITLE_FIELD_ID)) {
     fields.push(
       createDefaultFields().find(
@@ -308,24 +311,44 @@ function normalizeView(
   };
 }
 
-function migrateUntouchedBuiltinPrompts(fields: FieldDefinition[]): void {
+function migrateUntouchedFieldPrompts(fields: FieldDefinition[]): void {
+  const migrations = [
+    {
+      legacy: LEGACY_BUILTIN_FIELD_PROMPTS,
+      replacement: BUILTIN_FIELD_PROMPTS,
+      fromVersion: 1,
+      toVersion: 3,
+    },
+    {
+      legacy: STRUCTURED_BUILTIN_FIELD_PROMPTS,
+      replacement: BUILTIN_FIELD_PROMPTS,
+      fromVersion: 2,
+      toVersion: 3,
+    },
+    {
+      legacy: LEGACY_READING_FIELD_PROMPTS,
+      replacement: READING_FIELD_PROMPTS,
+      fromVersion: 6,
+      toVersion: 7,
+    },
+  ];
   for (const field of fields) {
-    const legacy = LEGACY_BUILTIN_FIELD_PROMPTS[field.id];
-    const replacement = BUILTIN_FIELD_PROMPTS[field.id];
-    if (!legacy || !replacement) continue;
-    if (
-      field.description !== legacy ||
-      field.extraction.instruction !== legacy ||
-      field.extraction.templateVersion !== 1
-    ) {
-      continue;
+    for (const migration of migrations) {
+      const legacy = migration.legacy[field.id];
+      const replacement = migration.replacement[field.id];
+      if (!legacy || !replacement) continue;
+      if (
+        field.description !== legacy ||
+        field.extraction.instruction !== legacy ||
+        field.extraction.templateVersion !== migration.fromVersion
+      ) {
+        continue;
+      }
+      field.description = replacement;
+      field.extraction.instruction = replacement;
+      field.extraction.templateVersion = migration.toVersion;
+      break;
     }
-    field.description = replacement;
-    field.extraction.instruction = replacement;
-    field.extraction.templateVersion = Math.max(
-      2,
-      field.extraction.templateVersion,
-    );
   }
 }
 

@@ -8,6 +8,9 @@ import {
 import {
   BUILTIN_FIELD_PROMPTS,
   LEGACY_BUILTIN_FIELD_PROMPTS,
+  LEGACY_READING_FIELD_PROMPTS,
+  READING_FIELD_PROMPTS,
+  STRUCTURED_BUILTIN_FIELD_PROMPTS,
   createDefaultLayout,
   createDefaultWorkspace,
 } from "../../src/domain/defaults";
@@ -145,7 +148,7 @@ describe("structured Zotero notes", function () {
     expect(migrated.extraction.instruction).to.equal(
       BUILTIN_FIELD_PROMPTS["research-question"],
     );
-    expect(migrated.extraction.templateVersion).to.equal(2);
+    expect(migrated.extraction.templateVersion).to.equal(3);
     expect(preserved.description).to.equal("我的自定义说明");
     expect(preserved.extraction.instruction).to.equal("我的自定义提示词");
     const preservedNewerTemplate = parsed.fields.find(
@@ -155,6 +158,59 @@ describe("structured Zotero notes", function () {
       LEGACY_BUILTIN_FIELD_PROMPTS["research-value"],
     );
     expect(preservedNewerTemplate.extraction.templateVersion).to.equal(3);
+  });
+
+  it("upgrades current reading templates without overwriting custom edits", function () {
+    const workspace = createDefaultWorkspace();
+    const builtIn = workspace.fields.find(
+      (field) => field.id === "research-question",
+    )!;
+    builtIn.description = STRUCTURED_BUILTIN_FIELD_PROMPTS[builtIn.id];
+    builtIn.extraction.instruction =
+      STRUCTURED_BUILTIN_FIELD_PROMPTS[builtIn.id];
+    builtIn.extraction.templateVersion = 2;
+
+    const reading = workspace.fields.find(
+      (field) => field.id === "research-significance",
+    )!;
+    reading.id = "paper-positioning";
+    reading.name = "论文定位";
+    reading.description = LEGACY_READING_FIELD_PROMPTS[reading.id];
+    reading.extraction.instruction = LEGACY_READING_FIELD_PROMPTS[reading.id];
+    reading.extraction.templateVersion = 6;
+
+    const custom = workspace.fields.find(
+      (field) => field.id === "research-value",
+    )!;
+    custom.id = "core-logic";
+    custom.name = "核心逻辑";
+    custom.description = "我的核心逻辑说明";
+    custom.extraction.instruction = "我的核心逻辑提示词";
+    custom.extraction.templateVersion = 6;
+
+    const parsed = parseWorkspaceNote(buildWorkspaceNote(workspace));
+    const migratedBuiltIn = parsed.fields.find(
+      (field) => field.id === "research-question",
+    )!;
+    const migratedReading = parsed.fields.find(
+      (field) => field.id === "paper-positioning",
+    )!;
+    const preserved = parsed.fields.find((field) => field.id === "core-logic")!;
+
+    expect(migratedBuiltIn.extraction.instruction).to.equal(
+      BUILTIN_FIELD_PROMPTS["research-question"],
+    );
+    expect(migratedBuiltIn.extraction.templateVersion).to.equal(3);
+    expect(migratedReading.description).to.equal(
+      READING_FIELD_PROMPTS["paper-positioning"],
+    );
+    expect(migratedReading.extraction.instruction).to.equal(
+      READING_FIELD_PROMPTS["paper-positioning"],
+    );
+    expect(migratedReading.extraction.templateVersion).to.equal(7);
+    expect(preserved.description).to.equal("我的核心逻辑说明");
+    expect(preserved.extraction.instruction).to.equal("我的核心逻辑提示词");
+    expect(preserved.extraction.templateVersion).to.equal(6);
   });
 
   it("adds 0.3 view metadata without changing old field values", function () {
