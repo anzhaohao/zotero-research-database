@@ -1,11 +1,10 @@
-import { API_ENDPOINT, API_TOKEN_PREF } from "../domain/defaults";
+import { mineruFileIO } from "./mineruFileIO";
 import type {
   ArtifactImport,
   ArtifactImportRequest,
   FigureArtifact,
   ManagedArtifact,
 } from "../domain/types";
-import { getPref, setPref } from "../utils/prefs";
 import { resolvePrimaryPdf } from "./primaryPdf";
 import { setCurrentArtifact } from "./artifactMetadata";
 import type { ResearchRepository } from "../storage/repository";
@@ -25,75 +24,6 @@ export type ArtifactImportRepository = Pick<
   | "loadPrimaryPdfKey"
   | "savePrimaryPdfKey"
 >;
-
-export function ensureArtifactImportToken(): string {
-  const current = String(getPref(API_TOKEN_PREF) || "");
-  if (current) return current;
-  const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  setPref(API_TOKEN_PREF, token);
-  return token;
-}
-
-export function rotateArtifactImportToken(): string {
-  setPref(API_TOKEN_PREF, "");
-  return ensureArtifactImportToken();
-}
-
-export function registerArtifactEndpoint(
-  repository: ArtifactImportRepository = getResearchRepository(),
-  createAttachment = createManagedAttachment,
-): void {
-  ensureArtifactImportToken();
-  Zotero.Server.Endpoints[API_ENDPOINT] = class {
-    supportedMethods = ["POST"];
-    supportedDataTypes = ["application/json"];
-    allowRequestsFromUnsafeWebContent = false;
-
-    async init({
-      headers,
-      data,
-    }: {
-      headers: Record<string, string>;
-      data: unknown;
-    }) {
-      const requestToken = Object.entries(headers || {}).find(
-        ([name]) => name.toLowerCase() === "x-zrdb-token",
-      )?.[1];
-      if (requestToken !== ensureArtifactImportToken()) {
-        return [
-          401,
-          "application/json",
-          JSON.stringify({ error: "unauthorized" }),
-        ];
-      }
-      try {
-        const result = await importArtifacts(
-          validateRequest(data),
-          repository,
-          createAttachment,
-        );
-        return [200, "application/json", JSON.stringify(result)];
-      } catch (error) {
-        Zotero.logError(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-        return [
-          400,
-          "application/json",
-          JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        ];
-      }
-    }
-  };
-}
-
-export function unregisterArtifactEndpoint(): void {
-  delete Zotero.Server.Endpoints[API_ENDPOINT];
-}
 
 export async function importArtifacts(
   request: ArtifactImportRequest,
@@ -449,7 +379,7 @@ export function validateRequest(data: unknown): ArtifactImportRequest {
 async function sha256File(path: string): Promise<string> {
   let bytes: Uint8Array;
   try {
-    bytes = await IOUtils.read(path);
+    bytes = await mineruFileIO.read(path);
   } catch {
     throw new Error(`无法读取产物文件：${path}`);
   }

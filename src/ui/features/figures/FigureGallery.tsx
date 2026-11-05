@@ -7,6 +7,10 @@ import {
 } from "react";
 import { resolvePrimaryPdf } from "../../../services/primaryPdf";
 import {
+  mineruFileIO,
+  mineruImageDataURI,
+} from "../../../services/mineruFileIO";
+import {
   getPdfRegionThumbnail,
   mineruFigureRenderPlan,
 } from "../../../services/pdfThumbnail";
@@ -115,7 +119,7 @@ export function FigureThumbnail({
         // Zotero 9.0.6 implements this as async even though the published
         // zotero-types declaration still says it returns a string.
         const generated = await Promise.resolve(
-          Zotero.File.generateDataURI(
+          mineruImageDataURI(
             path,
             imageContentType(
               path,
@@ -158,11 +162,11 @@ export function FigureThumbnail({
         figure.rect,
         renderPlan.openWidth,
       );
-      if (full.path && (await IOUtils.exists(full.path)))
+      if (full.path && (await mineruFileIO.exists(full.path)))
         await Zotero.launchFile(full.path);
       return;
     }
-    if (imagePath && (await IOUtils.exists(imagePath))) {
+    if (imagePath && (await mineruFileIO.exists(imagePath))) {
       await Zotero.launchFile(imagePath);
       return;
     }

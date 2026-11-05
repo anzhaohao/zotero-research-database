@@ -177,4 +177,29 @@ describe("Agent CLI executable discovery", function () {
     expect(result.executable).to.equal("/opt/custom/codex");
     expect(commands).to.deep.equal(["/opt/custom/codex"]);
   });
+
+  it("resolves an npm CMD launcher to its native executable before returning", async function () {
+    setPlatform("WINNT", { USERPROFILE: "C:\\Users\\reader" });
+    globals.PathUtils = { join: joinWindows };
+    const base = "C:\\tools\\codex";
+    const native = base + "\\node_modules\\codex.exe";
+    globals.IOUtils = {
+      exists: async (file: string) =>
+        [base, base + "\\node_modules", native].includes(file),
+      getChildren: async () => [base + "\\node_modules"],
+      stat: async () => ({ type: "directory" }),
+    };
+    const result = await resolveAgentExecutable(
+      undefined,
+      "codex",
+      "Codex CLI",
+      {
+        pathSearch: async (name: string) => {
+          if (name.endsWith(".exe")) throw new Error("not on PATH");
+          return base + "\\codex.CMD";
+        },
+      } as any,
+    );
+    expect(result).to.equal(native);
+  });
 });

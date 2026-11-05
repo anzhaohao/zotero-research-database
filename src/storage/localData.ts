@@ -1,4 +1,5 @@
 import type { ItemInternalState, WorkspaceState } from "../domain/types";
+import { longPathIO } from "../services/mineruFileIO";
 import {
   parseItemInternalState,
   type ResearchDataChangeScope,
@@ -120,11 +121,12 @@ function localBackupPath(): string | undefined {
 function runtimeIOUtils(): LocalIOUtils | undefined {
   try {
     if (typeof IOUtils !== "undefined")
-      return IOUtils as unknown as LocalIOUtils;
+      return longPathIO(IOUtils as unknown as LocalIOUtils);
   } catch {
     // The lexical global is not available in this runtime.
   }
-  return (globalThis as { IOUtils?: LocalIOUtils }).IOUtils;
+  const io = (globalThis as { IOUtils?: LocalIOUtils }).IOUtils;
+  return io ? longPathIO(io) : undefined;
 }
 
 function runtimePathUtils(): LocalPathUtils | undefined {

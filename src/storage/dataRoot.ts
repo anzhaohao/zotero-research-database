@@ -1,4 +1,5 @@
 import { config } from "../../package.json";
+import { longPathIO } from "../services/mineruFileIO";
 
 export const DATA_ROOT_PREF = "dataRoot";
 export const DATA_ROOT_SCHEMA_VERSION = 1;
@@ -66,11 +67,13 @@ function runtimePathUtils(): RuntimePathUtils | undefined {
 
 function runtimeIOUtils(): RuntimeIOUtils | undefined {
   try {
-    if (typeof IOUtils !== "undefined") return IOUtils as RuntimeIOUtils;
+    if (typeof IOUtils !== "undefined")
+      return longPathIO(IOUtils as RuntimeIOUtils);
   } catch {
     // The lexical global is unavailable in the unit-test runtime.
   }
-  return (globalThis as { IOUtils?: RuntimeIOUtils }).IOUtils;
+  const io = (globalThis as { IOUtils?: RuntimeIOUtils }).IOUtils;
+  return io ? longPathIO(io) : undefined;
 }
 
 function getBootstrapPref(): string {

@@ -3,7 +3,7 @@ import { completeDirectoryMigration } from "./storage/directoryMigration";
 import { completeDataRecovery } from "./storage/dataRecovery";
 import { createZToolkit } from "./utils/ztoolkit";
 import { MainViewController } from "./ui/viewController";
-import { unregisterArtifactEndpoint } from "./services/artifactEndpoint";
+import { clearPref } from "./utils/prefs";
 import { ItemPaneProperties } from "./ui/itemPaneProperties";
 import { PreferencesController } from "./ui/preferencesController";
 import { migrateAgentPreferences } from "./services/agentSettings";
@@ -92,7 +92,8 @@ async function onStartup() {
     // the exact same safe migration is retried on the next plugin startup.
     Zotero.logError(error instanceof Error ? error : new Error(String(error)));
   }
-  services.registerArtifactEndpoint();
+  // Retire the former HTTP import credential when upgrading existing profiles.
+  clearPref("artifactImportToken");
   artifactStorageNotifierID = await registerArtifactStorageNotifier();
   await itemPaneProperties.register();
   await Promise.all(
@@ -132,7 +133,6 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
-  unregisterArtifactEndpoint();
   unregisterArtifactStorageNotifier(artifactStorageNotifierID);
   artifactStorageNotifierID = undefined;
   itemPaneProperties.unregister();

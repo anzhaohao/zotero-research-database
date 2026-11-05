@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 - 每篇条目可在统一外部工具页面显式指定主 PDF，选择结果写入该条目的内部同步记录，不改名、不移动也不修改 PDF。未指定时按“附件标题恰好为 `PDF` → Zotero 最佳附件 → 第一个 PDF”的顺序自动选择；首页预览、MinerU 转换和 PDF 全文回退使用同一附件。
 - 内容优先读取 Zotero 条目下的 `【MinerU原文】*.md`，缺失时回退到主 PDF 的 Zotero 本地全文。
 - 支持动态比较、固定快照、调用外部 Agent 生成综合结论，以及 CSV、XLSX、HTML 和系统打印 PDF 导出。
-- 本地导入接口为 `POST /zotero-research-db/v1/artifacts/import`，可接收论文精读工作流验收后的 Markdown；0.4 预览协议还可接收带页码和区域坐标的图表图片，并按图表 ID 与哈希去重。
+- 本机 CLI 可在“设置 → 外部 Agent → 本机 CLI”中添加或编辑，支持 Codex CLI、Claude Code 和其他非交互 CLI；每项有独立名称、路径与参数，保存后可从“助手类型”选择。原 HTTP 产物回传接口和本地令牌已移除，内置 MinerU 仍通过内部导入流程写入附件。
 - 图表清单存在时，画廊按“一行两图”网格显示，图片宽度随列宽变化、高度按原始比例计算，不裁切也不拉伸，并使用轻量 `9px` 圆角；单击继续调用系统图片查看器，双击回到 Zotero PDF 页码或区域。图表列的新默认宽度为 `440px`，旧版未修改的内置 `280px` 默认值会自动迁移，用户保存视图和其它手动宽度保持不变。
 - Agent 提取优先接收主 PDF 的短期本机副本路径，供 Claude Code 或 Codex CLI 在受限只读目录中直接读取；Agent 无法读取 PDF 时自动回退到 Zotero 全文或 MinerU Markdown，扫描 PDF 也可以在没有 Zotero 文本缓存时直接交给视觉/OCR Agent。自定义 JSON Agent 会收到 `pdfPath`、可选 `text`、`images`、字段定义和 Schema；路径只在任务期间有效，不写入研究属性。
 
@@ -114,39 +114,28 @@ npm run build
 <repository-root>\release\zotero-research-database.xpi
 ```
 
-安装后应在附加组件管理器中看到版本 `0.3.39`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
+安装后应在附加组件管理器中看到版本 `0.3.45`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。
 
-# 本地导入接口
+# 本机 CLI 配置与换机
 
-请求头：
-
-```text
-Content-Type: application/json
-X-ZRDB-Token: <插件“外部工具”页面中显示的本地令牌>
-```
-
-请求体：
-
-```json
-{
-  "libraryID": 1,
-  "parentItemKey": "ABCD1234",
-  "workflowRunID": "20260801_example",
-  "artifacts": [
-    {
-      "role": "mineru-original",
-      "path": "D:\\output\\【MinerU原文】示例.md",
-      "sha256": "64位小写SHA-256",
-      "title": "【MinerU原文】示例.md"
-    }
-  ]
-}
-```
-
-同一角色和 SHA-256 再次交付时返回 `unchanged`，不会创建重复附件；内容变化时旧附件标记为历史版本。
+- 打开“设置 → 外部 Agent → 本机 CLI → 添加本机 CLI”，填写名称、调用方式和程序位置，也可点击“选择程序”。点击“保存到助手”后进入“助手类型”列表并选中；“编辑当前 CLI”更新原助手。供应商分别保存各助手的模型、思考强度与并发数；API 的地址、密钥与协议也按供应商与助手恢复。
+- 点击“自动查找 Codex / Claude Code”会搜索 PATH、常见安装目录和 Codex Desktop 工具目录，将找到的原生程序添加到助手类型；不依赖 npm。也可手动选择程序。应先在该电脑安装并登录。
+- 所有调用方式均提供“拉取上游模型”。Codex 使用 app-server 的 model/list；Claude Code 读取本机设置中的上游 API 模型接口，只有 OAuth 登录而无模型枚举凭据时会显示说明，可继续手填模型。其他 CLI 可在编辑器填写模型查询参数，输出 data / models 数组；无法枚举的 CLI 仍可手动输入模型。
+- “其他 CLI · 提示词模式”要求程序支持非交互调用并输出 JSON。默认通过标准输入传入提示词和 JSON Schema；通过参数传入时使用 `{prompt}`，例如 `["--print", "{prompt}"]`。另支持 `{model}`、`{effort}` 和 `{schema}`；所有替换保持为字面参数，不执行 Shell 或展开环境变量。
+- “其他 CLI · JSON 协议”保留兼容的自定义程序方式：标准输入是包含 `task`、`prompt`、`schema` 等字段的 JSON，标准输出仅返回结果 JSON。`probe` 请求返回 `{"ok":true}`，提取任务返回 Schema 规定的字段对象；若配置模型和思考强度，请求也包含 `model` 与 `reasoningEffort`。
+- 保存路径不等于模型连接已通过。保存后使用“检查助手”验证；不能非交互输出、只提供 TUI 或不返回兼容 JSON 的 CLI 需要自行提供适配脚本，不能仅填路径就保证可用。
+- 完整论文建议使用标准输入，避免命令行参数长度限制。脚本型 CLI 应填写解释器的程序路径（如 Node 或 Python），再将脚本路径放入启动参数；Windows 的 `.cmd` / `.ps1` 启动器不能当作原生可执行程序直接运行。
+- 新电脑应重新安装、登录 CLI，再选择或填写本机路径。CLI 登录状态、供应商凭据和本地代理服务不由插件自动迁移。
 
 ## 外文标题翻译
 
 - 外文标题优先复用已安装且启用的 Translate for Zotero 2.4.6 公共接口 `Zotero.PDFTranslate.api.translate`，并把返回结果写入插件研究属性 `translated-title`。
 - 公共接口不可用、返回空结果或调用失败时，自动回退当前已配置的 Agent；两条路径都不会修改 Zotero 原始标题、`Extra` 或其它书目字段。
 - `translated-title` 使用独立的本机持久化入口和变更通知作用域；保存时不调用通用 Extra 迁移或条目保存逻辑，已有值和人工锁定值也不会被覆盖。
+
+## MinerU 产物路径
+
+- 新结果保留论文 SHA-256 目录，临时目录使用 papers/.tmp-随机ID。图片统一保存为 images/内容SHA-256.扩展名；parse.json 保留原始名称，Markdown 和图表清单同步引用新名称，历史产物继续兼容。
+- 文件读写、复制、移动、删除及目录迁移统一处理 Windows 长路径，特殊前缀只存在于实际文件操作。导入前检查文件名与图片引用，完整暂存并校验后替换，写入或索引失败回滚旧结果。
+- 当共享产物路径超过 Zotero 10 可稳定回读的长度时，插件仍把源文件保存在研究产物目录，但会先复制到短临时路径并导入 Zotero storage；短路径继续使用 linked file。manifest 始终保存共享目录中的相对路径和 SHA-256，因此备份、迁移和图片预览都能继续使用共享源文件。
+- 文献处理使用可移动、可缩放的普通独立窗口；关闭运行中的窗口会请求取消并等待，Zotero 导入阶段等待完成。队列按实际成功、失败和取消数量显示结果与具体错误。

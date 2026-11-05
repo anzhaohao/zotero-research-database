@@ -1,3 +1,4 @@
+import { mineruFileIO } from "../services/mineruFileIO";
 import { config } from "../../package.json";
 import {
   getDataRootOrThrow,
@@ -201,13 +202,13 @@ export async function copyDirectoryMigration(
     const nativeFile = Zotero.File?.pathToFile?.(source);
     if (nativeFile?.isSymlink?.())
       throw new Error("迁移目录包含符号链接，未切换：" + source);
-    const stat = await (IOUtils as any).stat(source);
+    const stat = await mineruFileIO.stat(source);
     if (stat.type === "directory") {
-      await IOUtils.makeDirectory(target, {
+      await mineruFileIO.makeDirectory(target, {
         createAncestors: true,
         ignoreExisting: true,
       });
-      for (const child of await IOUtils.getChildren(source)) {
+      for (const child of await mineruFileIO.getChildren(source)) {
         const name = child.split(/[\\/]/).pop()!;
         if (name.endsWith(".tmp") || name.endsWith(".lock")) continue;
         const mapped = remap(child, plan.pairs);
@@ -219,7 +220,9 @@ export async function copyDirectoryMigration(
         // never compete with a newer canonical database for the same target.
         if (
           legacyDatabase &&
-          (await IOUtils.exists(PathUtils.join(source, "database.json"))) &&
+          (await mineruFileIO.exists(
+            PathUtils.join(source, "database.json"),
+          )) &&
           canonical(source) !== canonical(getLegacyDataRoot() || "")
         )
           continue;
@@ -228,7 +231,7 @@ export async function copyDirectoryMigration(
           canonical(source) === canonical(plan.sourceRoot) &&
           canonical(source) === canonical(getLegacyDataRoot() || "") &&
           name === "database.json" &&
-          (await IOUtils.exists(
+          (await mineruFileIO.exists(
             PathUtils.join(source, "research-data-v1.json"),
           ))
         )
@@ -255,7 +258,7 @@ export async function copyDirectoryMigration(
     }
     if (stat.type !== "regular")
       throw new Error("迁移遇到不支持的文件类型：" + source);
-    const original = await IOUtils.read(source);
+    const original = await mineruFileIO.read(source);
     let bytes = original;
     const name = source.split(/[\\/]/).pop()!;
     const parent = source
@@ -290,26 +293,29 @@ export async function copyDirectoryMigration(
         bytes = new TextEncoder().encode(JSON.stringify(mapped, null, 2));
     }
     const expected = await digest(bytes);
-    if (await IOUtils.exists(target)) {
-      if ((await digest(await IOUtils.read(target))) !== expected)
+    if (await mineruFileIO.exists(target)) {
+      if ((await digest(await mineruFileIO.read(target))) !== expected)
         throw new Error("目标已有不同内容，未覆盖或切换：" + target);
     } else {
       const temporary = target + ".zrdb-migration.tmp";
       try {
-        await IOUtils.write(temporary, bytes);
-        if ((await digest(await IOUtils.read(temporary))) !== expected)
+        await mineruFileIO.write(temporary, bytes);
+        if ((await digest(await mineruFileIO.read(temporary))) !== expected)
           throw new Error("迁移校验失败：" + target);
-        await (IOUtils as any).move(temporary, target, { noOverwrite: true });
+        await mineruFileIO.move(temporary, target, { noOverwrite: true });
         copied += 1;
       } finally {
-        await IOUtils.remove(temporary, { ignoreAbsent: true });
+        await mineruFileIO.remove(temporary, { ignoreAbsent: true });
       }
     }
-    if ((await digest(await IOUtils.read(source))) !== (await digest(original)))
+    if (
+      (await digest(await mineruFileIO.read(source))) !==
+      (await digest(original))
+    )
       throw new Error("迁移期间源文件被修改，未切换：" + source);
   };
   for (const pair of plan.pairs) {
-    if (!(await IOUtils.exists(pair.source))) {
+    if (!(await mineruFileIO.exists(pair.source))) {
       if (canonical(pair.source) === canonical(plan.sourceRoot))
         throw new Error("原研究数据库目录不存在，未切换：" + pair.source);
       continue;
@@ -346,11 +352,11 @@ export async function completeDirectoryMigration(): Promise<
       if (!previous) continue;
       const next = remap(previous, plan.pairs);
       if (next === previous) continue;
-      if (!(await IOUtils.exists(next)))
+      if (!(await mineruFileIO.exists(next)))
         throw new Error("迁移后附件缺失：" + next);
       if (
-        (await digest(await IOUtils.read(previous))) !==
-        (await digest(await IOUtils.read(next)))
+        (await digest(await mineruFileIO.read(previous))) !==
+        (await digest(await mineruFileIO.read(next)))
       )
         throw new Error("迁移后附件校验不一致：" + next);
       changed.push({ item, previous });
@@ -358,8 +364,8 @@ export async function completeDirectoryMigration(): Promise<
     }
     const targetRoot = plan.preferences.dataRoot || getLegacyDataRoot()!;
     const settingsPath = PathUtils.join(targetRoot, "settings.json");
-    if (await IOUtils.exists(settingsPath)) {
-      const bytes = await IOUtils.read(settingsPath);
+    if (await mineruFileIO.exists(settingsPath)) {
+      const bytes = await mineruFileIO.read(settingsPath);
       const settings = JSON.parse(new TextDecoder().decode(bytes));
       if (
         settings.schemaVersion !== 1 ||
@@ -383,7 +389,7 @@ export async function completeDirectoryMigration(): Promise<
     resetDataRootScope();
   } catch (error) {
     if (settingsRollback)
-      await IOUtils.write(settingsRollback.path, settingsRollback.bytes);
+      await mineruFileIO.write(settingsRollback.path, settingsRollback.bytes);
     for (const [key, value] of Object.entries(previousPrefs)) {
       try {
         if (value === undefined)

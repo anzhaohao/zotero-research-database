@@ -403,6 +403,10 @@ describe("host performance and bounded caches", function () {
 
   it("renders 51 real PDF widths with a 50-entry thumbnail cache", async function () {
     this.timeout(120_000);
+    // PDF.js rendering schedules animation frames on the main window. Previous
+    // settings/CLI tests may leave the test runner foregrounded instead.
+    Zotero.getMainWindow().focus();
+    await Zotero.Promise.delay(100);
     const parent = new Zotero.Item("journalArticle");
     parent.libraryID = Zotero.Libraries.userLibraryID;
     parent.setField("title", "ZRDB PDF cache performance sandbox test");

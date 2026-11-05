@@ -311,7 +311,9 @@
             >OpenAI 兼容 API（第三方模型）</html:option
           ><html:option value="ollama">Ollama（本机模型）</html:option
           ><html:option value="custom-json-process"
-            >自定义程序（高级）</html:option
+            >本机 CLI（JSON 协议）</html:option
+          ><html:option value="custom-prompt-cli"
+            >本机 CLI（提示词模式）</html:option
           ></html:select
         ></html:label
       >
@@ -340,7 +342,7 @@
       </html:label>
       <html:label
         class="zrdb-agent-model-control"
-        data-agent-kinds="codex-cli claude-code ollama openai-compatible"
+        data-agent-kinds="codex-cli claude-code ollama openai-compatible custom-prompt-cli custom-json-process"
         >模型
         <html:select
           id="zrdb-agent-model-select"
@@ -357,7 +359,8 @@
           placeholder="输入模型 ID"
           hidden="true"
       /></html:label>
-      <html:label data-agent-kinds="codex-cli claude-code openai-compatible"
+      <html:label
+        data-agent-kinds="codex-cli claude-code openai-compatible custom-prompt-cli custom-json-process"
         >思考强度
         <html:select data-pref="agentReasoningEffort">
           <html:option value="">默认</html:option>
@@ -388,11 +391,8 @@
         >同时生成的研究字段数量（1—8）。按供应商和模型分别保存，切换模型会恢复对应值。每个字段都会发送完整论文；并发越高，瞬时请求量越高，可能触发限流。</html:p
       >
       <html:div class="zrdb-pref-inline-actions">
-        <html:button
-          type="button"
-          id="zrdb-agent-model-refresh"
-          data-agent-kinds="ollama openai-compatible"
-          >刷新模型列表</html:button
+        <html:button type="button" id="zrdb-agent-model-refresh"
+          >拉取上游模型</html:button
         >
       </html:div>
       <html:div class="zrdb-agent-choice-hint">
@@ -415,42 +415,93 @@
         设置，不写入共享数据目录、备份或导出文件。检查助手不会读取论文，也不会写入研究数据。</html:p
       >
       <html:div class="zrdb-pref-callout zrdb-pref-local-interface">
-        <html:h4>本地接口</html:h4>
+        <html:h4>本机 CLI</html:h4>
         <html:p
-          >外部精读工作流向 Zotero
-          回传图表、表格和公式时，使用下面的本地令牌。它与论文处理助手的连接设置相互独立。</html:p
+          >添加或编辑本机命令行助手，保存后可在“助手类型”中选择。模型、思考强度和并发数按供应商与助手分别保存。</html:p
         >
-        <html:input
-          id="zrdb-artifact-import-token"
-          type="text"
-          readonly="true"
-          aria-label="精读工作流接口令牌"
-        />
         <html:div class="zrdb-pref-inline-actions">
-          <html:button type="button" id="zrdb-artifact-token-copy"
-            >复制令牌</html:button
+          <html:button type="button" id="zrdb-local-harness-detect"
+            >自动查找 Codex / Claude Code</html:button
           >
-          <html:button type="button" id="zrdb-artifact-token-rotate"
-            >轮换令牌</html:button
+          <html:button type="button" id="zrdb-local-harness-add"
+            >添加本机 CLI</html:button
+          >
+          <html:button
+            type="button"
+            id="zrdb-local-harness-edit"
+            data-agent-kinds="codex-cli claude-code custom-prompt-cli custom-json-process"
+            >编辑当前 CLI</html:button
           >
         </html:div>
-        <html:p class="zrdb-pref-warning"
-          >轮换后，使用旧令牌的工作流需要更新配置。</html:p
-        >
+        <html:div id="zrdb-local-harness-editor" hidden="true">
+          <html:label
+            >名称<html:input
+              type="text"
+              id="zrdb-local-harness-name"
+              placeholder="例如：我的 Codex / 本机 Gemini"
+          /></html:label>
+          <html:label
+            >调用方式<html:select id="zrdb-local-harness-kind">
+              <html:option value="codex-cli">Codex CLI</html:option>
+              <html:option value="claude-code">Claude Code</html:option>
+              <html:option value="custom-prompt-cli"
+                >其他 CLI · 提示词模式</html:option
+              >
+              <html:option value="custom-json-process"
+                >其他 CLI · JSON 协议</html:option
+              >
+            </html:select></html:label
+          >
+          <html:label
+            >程序位置<html:input
+              type="text"
+              id="zrdb-local-harness-path"
+              placeholder="程序完整路径或命令名"
+          /></html:label>
+          <html:div class="zrdb-pref-inline-actions"
+            ><html:button type="button" id="zrdb-local-harness-browse"
+              >选择程序…</html:button
+            ></html:div
+          >
+          <html:label id="zrdb-local-harness-args-row"
+            >启动参数（JSON 数组）<html:textarea
+              id="zrdb-local-harness-args"
+              rows="3"
+              placeholder='例如：["--print"]'
+            ></html:textarea
+          ></html:label>
+          <html:label id="zrdb-local-harness-model-args-row"
+            >模型查询参数（JSON 数组，可选）<html:textarea
+              id="zrdb-local-harness-model-args"
+              rows="2"
+              placeholder='例如：["models", "--json"]'
+            ></html:textarea
+          ></html:label>
+          <html:p id="zrdb-local-harness-help" class="zrdb-pref-help"></html:p>
+          <html:div class="zrdb-pref-inline-actions">
+            <html:button type="button" id="zrdb-local-harness-save"
+              >保存到助手</html:button
+            >
+            <html:button type="button" id="zrdb-local-harness-cancel"
+              >取消</html:button
+            >
+          </html:div>
+        </html:div>
       </html:div>
       <html:details class="zrdb-pref-advanced">
         <html:summary>高级设置与排障</html:summary>
         <html:p
           >只有在自动检测失败、需要指定程序位置，或接入自定义程序时才需要修改这些选项。</html:p
         >
-        <html:label data-agent-kinds="codex-cli claude-code custom-json-process"
+        <html:label
+          data-agent-kinds="codex-cli claude-code custom-json-process custom-prompt-cli"
           >程序位置（可选）
           <html:input
             type="text"
             data-pref="agentExecutable"
             placeholder="留空自动检测，或填写程序绝对路径"
         /></html:label>
-        <html:label data-agent-kinds="custom-json-process"
+        <html:label data-agent-kinds="custom-json-process custom-prompt-cli"
           >启动参数（JSON 数组）
           <html:input
             type="text"

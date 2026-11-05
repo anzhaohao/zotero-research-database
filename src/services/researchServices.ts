@@ -21,7 +21,6 @@ import {
 } from "./artifactStorage";
 import {
   importArtifacts,
-  registerArtifactEndpoint,
   type ArtifactImportRepository,
 } from "./artifactEndpoint";
 import {
@@ -63,8 +62,6 @@ export function createResearchServices(
       scanBrokenArtifactLinks(root, repository),
     importArtifacts: (request: ArtifactImportRequest) =>
       importArtifacts(request, repository, createAttachment),
-    registerArtifactEndpoint: () =>
-      registerArtifactEndpoint(repository, createAttachment),
     exportSnapshotAttachments: (
       item: Zotero.Item,
       snapshot: ComparisonSnapshot,

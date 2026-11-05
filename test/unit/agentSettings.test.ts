@@ -1,8 +1,10 @@
 import { expect } from "chai";
+import { saveLocalHarness } from "../../src/services/localHarness";
 import {
   activeAgentProviderID,
   deleteAgentProvider,
   getAgentModelPresets,
+  migrateLegacyHarnessProviders,
   parseAgentProfile,
   readActiveAgentProvider,
   readAgentProfile,
@@ -59,6 +61,39 @@ describe("external Agent settings", function () {
       }),
     };
   }
+
+  it("moves generated CLI suppliers into assistants without losing saved model settings", function () {
+    const api = provider("api", "API", "api-model");
+    const cli: SavedAgentProvider = {
+      id: "local-cli-123",
+      name: "My Codex",
+      kind: "codex-cli",
+      executable: "C:\\Tools\\codex.exe",
+      args: [],
+      model: "cli-model",
+      reasoningEffort: "high",
+      timeoutMs: 60000,
+    };
+    saveActiveAgentProvider(api, [api]);
+    saveActiveAgentProvider(cli);
+    migrateLegacyHarnessProviders();
+    expect(readAgentProviders()).to.have.length(1);
+    const current = readActiveAgentProvider();
+    expect(current).to.include({
+      id: "api",
+      assistantID: cli.id,
+      model: "cli-model",
+      executable: cli.executable,
+    });
+    expect(current.assistantProfiles?.[cli.id].reasoningEffort).to.equal(
+      "high",
+    );
+    expect(current.assistantProfiles?.["openai-compatible"].apiKey).to.equal(
+      api.apiKey,
+    );
+    migrateLegacyHarnessProviders();
+    expect(readAgentProviders()).to.have.length(1);
+  });
 
   it("parses a direct JSON process without constructing a shell command", function () {
     expect(
@@ -217,6 +252,43 @@ describe("external Agent settings", function () {
     expect(activeAgentProviderID()).to.equal("second");
     expect(readActiveAgentProvider().model).to.equal("model-b");
     expect(() => deleteAgentProvider("second")).to.throw("至少需要保留一个");
+  });
+
+  it("keeps assistant-specific API credentials separate and resolves updated CLI paths", function () {
+    const api = provider("default", "供应商", "api-model");
+    const cli = {
+      kind: "custom-prompt-cli" as const,
+      executable: "/old/cli",
+      model: "cli-model",
+      timeoutMs: 30_000,
+    };
+    saveLocalHarness({ id: "assistant-cli", name: "My CLI", ...cli });
+    saveActiveAgentProvider({
+      id: api.id,
+      name: api.name,
+      ...cli,
+      assistantID: "assistant-cli",
+      assistantProfiles: { "openai-compatible": api, "assistant-cli": cli },
+    });
+    saveLocalHarness({
+      id: "assistant-cli",
+      name: "My CLI",
+      ...cli,
+      executable: "/new/cli",
+    });
+    expect(readAgentProfile()).to.include({
+      executable: "/new/cli",
+      model: "cli-model",
+      assistantID: "assistant-cli",
+    });
+    const saved = readAgentProviders()[0];
+    expect(saved.apiKey).to.equal(undefined);
+    expect(saved.assistantProfiles?.["openai-compatible"]).to.include({
+      model: "api-model",
+      apiKey: "default-secret",
+      apiProtocol: "responses",
+    });
+    expect(readAgentProviders()).to.have.length(1);
   });
 
   it("does not overwrite a damaged provider list with legacy settings", function () {

@@ -771,3 +771,23 @@ gitGraph
 - 验证：320 项单元测试、主项目与测试 TypeScript、完整 lint 通过；隔离 Zotero 10.0.7 常规宿主 31 passed / 8 pending（外部模型与可选插件测试未启用）。新增宿主断言覆盖字体选项、预览、恢复默认、保存后重开、打开表格的即时更新，以及大字号下标题和普通强调的区别。
 - 独立 Playwright 渲染外观设置的 1440×900、390×844 与深色截图，无页面错误、资源失败或横向溢出；证据在忽略目录 .scaffold/typography-*.png。
 - XPI 统一交付 release/zotero-research-database.xpi，上一包归档 release/archive/。包大小 1,030,799 字节，47 个 ZIP 条目 CRC 校验通过；SHA-256 为 564CD5E3AE0CD254479AF562D9AD6D6BA2A2C968395D0FE584AC6231E5761981。未自动安装正式 profile；用户已授权在 codex/shared-mineru-store 提交并 push，具体提交号见 git log。
+
+## 2026-11-05 本机 Harness CLI 手动配置（0.3.44）
+
+- 用户授权移除原本机 HTTP 产物导入接口与令牌，并明确要求所有本地 Harness CLI 都可手动配置。当前仍在 codex/shared-mineru-store，HEAD 为 262c1b8；本轮改动尚未提交或 push，不延用上一轮的提交授权。
+- 设置 → 外部 Agent → 本机 CLI 新增“添加本机 CLI”“编辑当前 CLI”“选择程序”。每项可命名，保存后进入当前供应商列表并选中；编辑保留供应商 ID，切换与重开设置可恢复路径、参数及模型配置。Codex CLI / Claude Code 保留专用适配和自动检测；其他 CLI 使用提示词模式或原 JSON 协议，均支持手动程序路径或 PATH 命令。
+- 提示词模式默认通过标准输入发送完整提示词和 Schema，参数支持字面替换 {prompt}、{model}、{effort}、{schema}，不执行 Shell 或展开环境变量。JSON 协议请求补充已配置的 model / reasoningEffort。保存成功不等于模型连通，需点击“检查助手”验证输出。
+- 通用模式要求非交互调用和符合 Schema 的 JSON；仅有 TUI 或专有输出的工具需自行提供适配脚本。脚本应填 Node/Python 等解释器路径并在参数中指定脚本，不能把 Windows .cmd/.ps1 当作原生程序。长论文优先 stdin，避免 argv 长度限制；未实测所有第三方 Harness 或付费模型。
+- 删除 HTTP 路由注册/注销、令牌生成/复制/轮换、默认偏好和设置控件；升级启动时清理旧 artifactImportToken。旧备份的该键仍作为废弃敏感项排除。内部 importArtifacts 与 MinerU 导入保留，未删除产物或研究数据。
+- 新通用桥接从写入 stdin 前开始计时，避免不读取输入的 CLI 堵塞管道后无限等待；超时终止子进程并保留超时原因。隔离 Zotero 用不读输入的真实 Node 子进程发送约 220 万字符验证，250ms 超时在约 0.3 秒明确退出。测试曾发现终止导致的管道错误抢先覆盖超时，已修复并复验。
+- 验证：325 项单元通过，主项目及测试 TypeScript、完整 lint、diff 检查通过。隔离 Zotero 10 常规宿主 34 passed / 8 pending；随后增加超时回归并复跑受影响范围 5 passed，覆盖 stdin / argv、字段 JSON、进程错误、超时、四种调用方式保存和供应商切换、设置关闭重开。外部模型与可选第三方插件测试未启用，没有发起付费模型请求。
+- 独立 Playwright 检查 1440×900、390×844、深色截图，无页面错误、资源失败或横向溢出；已目视检查窄屏及深色截图。证据在忽略目录 .scaffold/local-harness-*.png。真实正式 Zotero profile 未覆盖安装或更改；宿主测试使用隔离 .scaffold/test/profile，并通过 kill override 避免关闭真实实例。
+- 生产包 release/zotero-research-database.xpi 为 0.3.44，1,032,422 字节，47 条目 CRC 完整；SHA-256 为 294732B0A17BD199567995E312BF7B66E1B75DF4EC10F1D22C545547225056DD。确认包含新 CLI 控件，不含废弃 HTTP 路径和测试运行时配置；上一版按规范归档 release/archive/。后续安装新版并在用户选定的实际 CLI 上点击检查助手即可验证各工具的登录和参数。
+
+## 2026-11-05 MinerU 超长路径附件回退（0.3.45）
+
+- 定位：Windows 长路径兼容层可以读写共享 MinerU 目录，但 Zotero 10 的 Attachments.linkFromFile() 及后续附件状态检查仍使用未加扩展前缀的普通路径。共享根目录达到约 500 字符时，linked attachment 创建后无法被 Zotero 自身回读，之前会导致整次产物导入失败。
+- 修复：createManagedAttachment() 先尝试 linked file；失败后把共享源文件复制到短临时路径，通过 Zotero.Attachments.importFromFile() 创建 stored attachment，随后删除临时副本。共享目录中的源文件、manifest 相对路径和 SHA-256 保留不变，短路径仍保持 linked file 模式。
+- 结果：Zotero storage 只作为超长路径的宿主兼容回退，不改变备份/迁移的共享目录数据模型；图片预览继续通过长路径 IO 读取共享源文件。
+- 测试：新增隔离宿主断言，要求超长共享根导入后使用 stored attachment 并可重新打开、读取和生成图片 Data URI；短路径的 linked-file 迁移测试继续保留。单元测试 333 项通过，npx tsc --noEmit 通过；npm test -- --no-watch --abort-on-fail --exit-on-finish 已触发构建但当前环境找不到 Zotero 可执行文件，因此该宿主断言尚未在本轮执行。
+- 交付：版本保持 0.3.45。正式构建后 XPI 统一输出 release/zotero-research-database.xpi，旧包归档到 release/archive/。

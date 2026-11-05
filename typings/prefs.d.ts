@@ -8,7 +8,6 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "enable": boolean;
-      "artifactImportToken": string;
       "artifactMetadataMigrationVersion": number;
       "artifactStorageRoot": string;
       "dataRoot": string;
@@ -33,6 +32,7 @@ declare namespace _ZoteroTypes {
       "mineruFigureFallback": boolean;
       "figureImageQuality": string;
       "agentKind": string;
+      "localHarnesses": string;
       "agentExecutable": string;
       "agentArgs": string;
       "agentEndpoint": string;

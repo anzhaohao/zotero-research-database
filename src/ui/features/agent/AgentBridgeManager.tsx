@@ -10,12 +10,12 @@ import {
   readMinerUProfile,
 } from "../../../services/mineru";
 import { openResearchPreferences } from "../../preferencesNavigation";
-import { Modal } from "../shared/ui";
+import { NativeToolWindow } from "../shared/NativeToolWindow";
 
 export function AgentBridgeManager({
   repository,
   initialTab,
-  items,
+  items: selectedItems,
   onArtifactsImported,
   onClose,
 }: {
@@ -25,6 +25,7 @@ export function AgentBridgeManager({
   onArtifactsImported: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [items] = useState(() => [...selectedItems]);
   const [status, setStatus] = useState("");
   const [savedMode, setSavedMode] = useState<MinerUProfile["mode"]>();
   const { pdfRows, reloadPdfRows } = usePrimaryPdfRows(items, repository);
@@ -49,7 +50,10 @@ export function AgentBridgeManager({
     refreshSavedMode();
     const mainWindow = Zotero.getMainWindow();
     mainWindow?.addEventListener("focus", refreshSavedMode);
-    return () => mainWindow?.removeEventListener("focus", refreshSavedMode);
+    return () => {
+      mainWindow?.removeEventListener("focus", refreshSavedMode);
+      mineruServiceRef.current?.cancel();
+    };
   }, []);
 
   const runMinerU = async (
@@ -73,10 +77,12 @@ export function AgentBridgeManager({
     setStatus(
       `正在使用 ${mineruModeLabel(profile.mode)} 转换 ${targets.length} 篇论文……`,
     );
+    const outcomes = new Map<string, MinerUProgress>();
     try {
       await service.run(
         targets,
         (entry) => {
+          outcomes.set(entry.itemKey, entry);
           setMineruImporting(
             entry.state === "running" &&
               entry.message.includes("正在导入 Zotero"),
@@ -90,7 +96,13 @@ export function AgentBridgeManager({
         { forceRefresh },
       );
       await onArtifactsImported();
-      setStatus("MinerU 队列已结束；Markdown 与图表已刷新到对应条目");
+      const counts = { success: 0, failed: 0, cancelled: 0 };
+      for (const entry of outcomes.values())
+        if (entry.state in counts) counts[entry.state as keyof typeof counts]++;
+      setStatus(
+        `MinerU 队列已结束：成功 ${counts.success} 篇，失败 ${counts.failed} 篇，取消 ${counts.cancelled} 篇。` +
+          (counts.failed ? "请查看各文献的错误详情。" : ""),
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -120,7 +132,7 @@ export function AgentBridgeManager({
   };
 
   return (
-    <Modal title="文献处理" onClose={requestClose} wide>
+    <NativeToolWindow title="文献处理" onClose={requestClose}>
       <nav className="zrdb-tool-tabs" aria-label="当前文献处理">
         {(
           [
@@ -179,6 +191,6 @@ export function AgentBridgeManager({
           {mineruRunning ? "取消并等待完成" : "完成"}
         </button>
       </div>
-    </Modal>
+    </NativeToolWindow>
   );
 }

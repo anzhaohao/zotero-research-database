@@ -10,6 +10,7 @@ const AGENT_LABELS: Record<AgentProfile["kind"], string> = {
   ollama: "Ollama",
   "openai-compatible": "OpenAI 兼容 API",
   "custom-json-process": "自定义程序",
+  "custom-prompt-cli": "本机 CLI（提示词）",
 };
 
 function redactDiagnostic(value: string, apiKey?: string): string {

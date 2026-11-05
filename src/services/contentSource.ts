@@ -1,4 +1,5 @@
 import type { SourceText } from "../domain/types";
+import { mineruFileIO } from "./mineruFileIO";
 import { resolvePrimaryPdf } from "./primaryPdf";
 import type { ResearchRepository } from "../storage/repository";
 import { getResearchRepository } from "../storage/repositoryScope";
@@ -29,7 +30,7 @@ export async function readExistingMinerUMarkdown(
     const path = await attachment.getFilePathAsync();
     if (!path) continue;
     try {
-      const text = toText(await Zotero.File.getContentsAsync(path, "utf-8"));
+      const text = toText(await mineruFileIO.readUTF8(path));
       if (text.trim()) return { attachment, text };
     } catch {
       // A missing or partially written attachment must not block reconversion.

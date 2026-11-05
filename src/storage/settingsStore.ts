@@ -36,6 +36,7 @@ export const PORTABLE_SETTING_KEYS = [
   "mineruFigureFallback",
   "figureImageQuality",
   "agentKind",
+  "localHarnesses",
   "agentExecutable",
   "agentArgs",
   "agentEndpoint",

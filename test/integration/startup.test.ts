@@ -856,13 +856,47 @@ describe("startup", function () {
     mineruShortcut!.click();
     await waitForHostCondition(() =>
       Boolean(
-        customPane!.querySelector('[role="dialog"][aria-label="文献处理"]'),
+        Services.wm
+          .getMostRecentWindow("zrdb:document-processing")
+          ?.document.querySelector('[aria-label="文献处理"]'),
       ),
     );
-    let externalToolsDialog = customPane!.querySelector<HTMLElement>(
-      '[role="dialog"][aria-label="文献处理"]',
-    );
+    let externalToolsDialog = Services.wm
+      .getMostRecentWindow("zrdb:document-processing")
+      ?.document.querySelector<HTMLElement>('[aria-label="文献处理"]');
     assert.exists(externalToolsDialog, "MinerU shortcut dialog");
+    assert.notExists(
+      customPane!.querySelector(".zrdb-modal-backdrop"),
+      "processing does not block the main table",
+    );
+    const processingWindow = Services.wm.getMostRecentWindow(
+      "zrdb:document-processing",
+    ) as unknown as Window;
+    assert.notEqual(
+      processingWindow,
+      win,
+      "processing has a separate native window",
+    );
+    const previousWidth = processingWindow.outerWidth;
+    processingWindow.resizeTo(
+      previousWidth + 80,
+      processingWindow.outerHeight + 40,
+    );
+    await Zotero.Promise.delay(80);
+    assert.isAbove(
+      processingWindow.outerWidth,
+      previousWidth,
+      "processing window resizes independently",
+    );
+    const previousX = processingWindow.screenX;
+    const previousY = processingWindow.screenY;
+    processingWindow.moveTo(previousX + 25, previousY + 25);
+    await Zotero.Promise.delay(80);
+    assert.isTrue(
+      processingWindow.screenX !== previousX ||
+        processingWindow.screenY !== previousY,
+      "processing window moves independently",
+    );
     let toolTabs = [
       ...externalToolsDialog!.querySelectorAll<HTMLButtonElement>(
         ".zrdb-tool-tabs button",
@@ -897,10 +931,12 @@ describe("startup", function () {
     forceRefresh!.click();
     assert.include(externalToolsDialog!.textContent || "", "重新解析选中 1 篇");
     forceRefresh!.click();
-    externalToolsDialog!
-      .querySelector<HTMLButtonElement>("header button")!
-      .click();
+    processingWindow.close();
     await Zotero.Promise.delay(40);
+    assert.isTrue(
+      processingWindow.closed,
+      "native close releases the idle processing window",
+    );
 
     const primaryPdfItem = [
       ...customPane!.querySelectorAll<HTMLButtonElement>(".zrdb-menu-item"),
@@ -912,12 +948,14 @@ describe("startup", function () {
     primaryPdfItem!.click();
     await waitForHostCondition(() =>
       Boolean(
-        customPane!.querySelector('[role="dialog"][aria-label="文献处理"]'),
+        Services.wm
+          .getMostRecentWindow("zrdb:document-processing")
+          ?.document.querySelector('[aria-label="文献处理"]'),
       ),
     );
-    externalToolsDialog = customPane!.querySelector<HTMLElement>(
-      '[role="dialog"][aria-label="文献处理"]',
-    );
+    externalToolsDialog = Services.wm
+      .getMostRecentWindow("zrdb:document-processing")
+      ?.document.querySelector<HTMLElement>('[aria-label="文献处理"]');
     assert.exists(externalToolsDialog, "current paper processing dialog");
     toolTabs = [
       ...externalToolsDialog!.querySelectorAll<HTMLButtonElement>(
@@ -941,7 +979,7 @@ describe("startup", function () {
     );
     assert.include(externalToolsDialog!.textContent || "", "转换此篇");
     externalToolsDialog!
-      .querySelector<HTMLButtonElement>("header button")!
+      .querySelector<HTMLButtonElement>(".zrdb-dialog-actions button")!
       .click();
     await Zotero.Promise.delay(40);
     assert.notInclude(newErrors.join("\n"), "zoteroResearchDatabase.js");

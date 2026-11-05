@@ -142,7 +142,8 @@ export class ExternalAgentExtractionService {
           !prepared.text.trim() &&
           (agent.kind === "openai-compatible" ||
             agent.kind === "ollama" ||
-            agent.kind === "codex-cli")
+            agent.kind === "codex-cli" ||
+            agent.kind === "custom-prompt-cli")
         ) {
           throw new Error(
             "PDF 没有可确认完整的可读全文。请先运行 MinerU 或 OCR，再填充文献；当前填充方式需要完整论文文本",

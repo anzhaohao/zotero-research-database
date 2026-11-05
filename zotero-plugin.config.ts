@@ -61,6 +61,9 @@ export default defineConfig({
     waitForPlugin: `() => Zotero.${pkg.config.addonInstance}.data.initialized`,
     startupDelay: 2_000,
     prefs: {
+      "extensions.zotero-research-database.test.localCliNode": process.execPath,
+      "extensions.zotero-research-database.test.liveModelLists":
+        process.env.ZRDB_TEST_LIVE_MODELS === "1",
       "extensions.zotero-research-database.test.pdfTranslateXpiInstalled":
         Boolean(pdfTranslateTestXpi),
       "extensions.zotero-research-database.test.externalAgentEnabled":

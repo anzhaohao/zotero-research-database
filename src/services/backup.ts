@@ -1,6 +1,5 @@
 import JSZip from "jszip";
 import { version } from "../../package.json";
-import { API_TOKEN_PREF } from "../domain/defaults";
 import type {
   ComparisonDefinition,
   ComparisonSnapshot,
@@ -32,7 +31,7 @@ export const BACKUP_FILE_NAMES = [
  * machine keeps its own values.
  */
 const EXCLUDED_PREF_KEYS = new Set<string>([
-  API_TOKEN_PREF,
+  "artifactImportToken", // Legacy backups must never restore this retired secret.
   "agentApiKey",
   "mineruOfficialToken",
 ]);

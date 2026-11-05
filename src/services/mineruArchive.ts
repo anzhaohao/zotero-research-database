@@ -1,4 +1,4 @@
-import JSZip from "jszip";
+import type JSZip from "jszip";
 
 export interface MinerUArchiveEntry {
   name: string;
@@ -65,6 +65,8 @@ async function withTemporaryImmediate<T>(
 async function readJSZipEntries(
   bytes: Uint8Array,
 ): Promise<MinerUArchiveEntry[]> {
+  // Avoid JSZip's global scheduler polyfill when Gecko's native reader is used.
+  const { default: JSZip } = await import("jszip");
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(bytes);

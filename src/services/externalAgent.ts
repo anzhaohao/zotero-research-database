@@ -2,6 +2,7 @@ import { z } from "zod";
 import { captureSubprocessOutput } from "./subprocessOutput";
 import { buildCodexWorkerConfig } from "./codexWorkerConfig";
 import { agentConcurrency } from "./agentConcurrency";
+import { localPromptInvocation } from "./localHarness";
 import {
   readAgentAPIResponse,
   type AgentResponseProgress,
@@ -246,7 +247,8 @@ export type AgentAdapterKind =
   | "hana-agent"
   | "ollama"
   | "openai-compatible"
-  | "custom-json-process";
+  | "custom-json-process"
+  | "custom-prompt-cli";
 
 export type AgentApiProtocol = "chat-completions" | "responses";
 
@@ -264,6 +266,7 @@ const OPENAI_API_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 
 export interface AgentProfile {
   kind: AgentAdapterKind;
+  assistantID?: string;
   executable?: string;
   args?: string[];
   endpoint?: string;
@@ -693,6 +696,99 @@ export function buildClaudeCodeWorkerArguments(
     ...(profile.model ? ["--model", profile.model] : []),
     ...(profile.reasoningEffort ? ["--effort", profile.reasoningEffort] : []),
   ];
+}
+
+export class LocalPromptCliBridge extends StructuredPromptAgentBridge {
+  readonly kind = "custom-prompt-cli" as const;
+  private running?: ProcessHandle;
+
+  constructor(private profile: AgentProfile) {
+    super();
+  }
+
+  cancel(): void {
+    if (this.running) void killAndWait(this.running);
+  }
+
+  private async executable(): Promise<string> {
+    const value = this.profile.executable?.trim();
+    if (!value) throw new Error("请填写本机 CLI 程序路径或命令名");
+    if (value.includes("/") || value.includes("\\")) {
+      if (!(await IOUtils.exists(value)))
+        throw new Error(`本机 CLI 不存在：${value}`);
+      return value;
+    }
+    return getSubprocess().pathSearch(value);
+  }
+
+  async probe(): Promise<{ executable: string; version: string }> {
+    return {
+      executable: await this.executable(),
+      version: "本机 CLI（提示词模式；待验证输出）",
+    };
+  }
+
+  protected async runStructuredPrompt(
+    prompt: string,
+    schema: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (this.running) throw new Error("已有本机 CLI 任务正在运行");
+    const invocation = localPromptInvocation(
+      this.profile.args || [],
+      prompt,
+      schema,
+      this.profile.model,
+      this.profile.reasoningEffort,
+    );
+    const process = await getSubprocess().call({
+      command: await this.executable(),
+      arguments: invocation.arguments,
+      environmentAppend: true,
+      stderr: "pipe",
+    });
+    this.running = process;
+    try {
+      const stdout = captureSubprocessOutput(process.stdout);
+      const stderr = captureSubprocessOutput(process.stderr);
+      // Start the deadline before writing: a CLI that never reads stdin can
+      // otherwise block on a full pipe before process.wait() is reached.
+      let inputError: unknown;
+      const [result] = await Promise.all([
+        waitForProcess(
+          process,
+          this.profile.timeoutMs,
+          "本机 CLI 超时，已停止且未写入研究属性",
+        ),
+        (async () => {
+          try {
+            if (invocation.stdin) await process.stdin.write(invocation.stdin);
+            await process.stdin.close();
+          } catch (error) {
+            // Killing a timed-out child also rejects its pending pipe write.
+            // Preserve the deadline error instead of racing it with that error.
+            inputError = error;
+            await killAndWait(process);
+          }
+        })(),
+      ]);
+      const output = await stdout.done;
+      const errors = await stderr.done;
+      if (inputError)
+        throw new Error(
+          `本机 CLI 未能接收提示词：${tail(errors || output || String(inputError))}`,
+        );
+      if (result.exitCode !== 0)
+        throw new Error(
+          `本机 CLI 失败（退出码 ${result.exitCode}）：${tail(errors || output)}`,
+        );
+      return parseLooseJSON(output);
+    } catch (error) {
+      await killAndWait(process);
+      throw error;
+    } finally {
+      this.running = undefined;
+    }
+  }
 }
 
 export class ClaudeCodeAgentBridge extends StructuredPromptAgentBridge {
@@ -1265,7 +1361,15 @@ export class ConfiguredAgentBridge implements AgentBridge {
     try {
       const stdout = captureSubprocessOutput(process.stdout);
       const stderr = captureSubprocessOutput(process.stderr);
-      await process.stdin.write(JSON.stringify(payload));
+      await process.stdin.write(
+        JSON.stringify({
+          ...payload,
+          ...(this.profile.model ? { model: this.profile.model } : {}),
+          ...(this.profile.reasoningEffort
+            ? { reasoningEffort: this.profile.reasoningEffort }
+            : {}),
+        }),
+      );
       await process.stdin.close();
       const result = await waitForProcess(
         process,
@@ -1343,6 +1447,8 @@ export class ConfiguredAgentBridge implements AgentBridge {
 function createRawAgentBridge(profile: AgentProfile): AgentBridge {
   if (profile.kind === "codex-cli") return new CodexAgentBridge(profile);
   if (profile.kind === "claude-code") return new ClaudeCodeAgentBridge(profile);
+  if (profile.kind === "custom-prompt-cli")
+    return new LocalPromptCliBridge(profile);
   if (profile.kind === "hana-agent") return new HanaAgentBridge(profile);
   return new ConfiguredAgentBridge(profile);
 }
@@ -2168,7 +2274,7 @@ function extractionValueSchema(field: FieldDefinition): z.ZodType {
   return z.string();
 }
 
-function getSubprocess(): SubprocessAPI {
+export function getSubprocess(): SubprocessAPI {
   return (ChromeUtils.importESModule(CODEX_MODULE) as any)
     .Subprocess as SubprocessAPI;
 }
@@ -2179,7 +2285,9 @@ function getSubprocess(): SubprocessAPI {
  * global skills manager, so inheriting it can make a malformed third-party
  * SKILL.md abort an otherwise unrelated extraction task.
  */
-async function prepareIsolatedCodexHome(directory: string): Promise<void> {
+export async function prepareIsolatedCodexHome(
+  directory: string,
+): Promise<void> {
   await IOUtils.makeDirectory(directory, { ignoreExisting: true });
   const configuredHome = Services.env.get("CODEX_HOME");
   const profileHome =
@@ -2292,7 +2400,10 @@ export async function resolveAgentExecutable(
   let pathError: unknown;
   for (const fileName of fileNames) {
     try {
-      return await subprocess.pathSearch(fileName);
+      const found = await subprocess.pathSearch(fileName);
+      if (platform !== "WINNT" || /\.exe$/i.test(found)) return found;
+      const nested = await findNativeAgentNearLauncher(found, command);
+      if (nested) return nested;
     } catch (error) {
       pathError = error;
     }
@@ -2308,10 +2419,70 @@ export async function resolveAgentExecutable(
   for (const candidate of candidates) {
     if (await IOUtils.exists(candidate)) return candidate;
   }
+  if (platform === "WINNT") {
+    const home = Services.env.get("USERPROFILE");
+    if (home) {
+      for (const directory of [
+        PathUtils.join(home, "Documents", "Codex", "tools", "codex-cli"),
+        PathUtils.join(home, "AppData", "Local", "OpenAI", "Codex", "bin"),
+        PathUtils.join(home, ".claude", "local"),
+      ]) {
+        const native = await findNativeAgentInDirectory(directory, command);
+        if (native) return native;
+      }
+    }
+  }
   throw new Error(
     `未找到可执行的 ${label}。已检查 PATH 和常见安装目录；请先安装，或在“高级设置与排障 → 程序位置”中填写 ${fileName} 的绝对路径。`,
     { cause: pathError },
   );
+}
+
+async function findNativeAgentNearLauncher(
+  launcher: string,
+  command: AgentCLICommand,
+): Promise<string | undefined> {
+  return findNativeAgentInDirectory(
+    launcher.replace(/[\\/][^\\/]+$/, ""),
+    command,
+  );
+}
+
+async function findNativeAgentInDirectory(
+  directory: string,
+  command: AgentCLICommand,
+  depth = 0,
+  budget = { remaining: 400 },
+): Promise<string | undefined> {
+  if (
+    depth > 9 ||
+    budget.remaining-- <= 0 ||
+    !(await IOUtils.exists(directory))
+  )
+    return;
+  const direct = PathUtils.join(directory, command + ".exe");
+  if (await IOUtils.exists(direct)) return direct;
+  let children: string[];
+  try {
+    children = await (IOUtils as any).getChildren(directory);
+  } catch {
+    return;
+  }
+  for (const child of children.sort().reverse()) {
+    if (budget.remaining-- <= 0) return;
+    try {
+      if ((await (IOUtils as any).stat(child)).type !== "directory") continue;
+      const found = await findNativeAgentInDirectory(
+        child,
+        command,
+        depth + 1,
+        budget,
+      );
+      if (found) return found;
+    } catch {
+      /* Ignore inaccessible unrelated packages. */
+    }
+  }
 }
 
 function parseClaudeStructuredOutput(output: string): unknown {

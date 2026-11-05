@@ -1,5 +1,6 @@
 import { importArtifacts } from "./artifactEndpoint";
 import { readExistingMinerUMarkdown, sha256Text } from "./contentSource";
+import { mineruFileIO } from "./mineruFileIO";
 import {
   readMinerUArchiveEntries,
   type MinerUArchiveEntry,
@@ -353,7 +354,7 @@ export class MinerUConversionService {
         const identity: SharedMinerUIdentity = {
           libraryID: item.libraryID,
           attachmentKey: pdf.key,
-          pdfSha256: await sha256Bytes(await IOUtils.read(pdfPath)),
+          pdfSha256: await sha256Bytes(await mineruFileIO.read(pdfPath)),
           pdfFileName: PathUtils.filename(pdfPath),
         };
         const claim = await claimSharedMinerUWork({
@@ -419,7 +420,7 @@ export class MinerUConversionService {
         this.throwIfCancelled();
         if (!result.markdown.trim())
           throw new Error("MinerU 没有生成 Markdown");
-        await IOUtils.makeDirectory(directory, { ignoreExisting: true });
+        await mineruFileIO.makeDirectory(directory, { ignoreExisting: true });
         const title = await this.importConversionResult(
           item,
           pdf,
@@ -446,7 +447,7 @@ export class MinerUConversionService {
         });
       } finally {
         this.importing = false;
-        await IOUtils.remove(directory, {
+        await mineruFileIO.remove(directory, {
           recursive: true,
           ignoreAbsent: true,
         });
@@ -463,7 +464,7 @@ export class MinerUConversionService {
   ): Promise<string> {
     const title = `【MinerU原文】${safeBaseName(pdfPath)}.md`;
     const markdownPath = PathUtils.join(directory, title);
-    await IOUtils.writeUTF8(markdownPath, result.markdown);
+    await mineruFileIO.writeUTF8(markdownPath, result.markdown);
     this.throwIfCancelled();
     const figureArtifacts = [];
     for (const figure of result.figures) {
@@ -474,7 +475,7 @@ export class MinerUConversionService {
         directory,
         `${figure.kind}-${imageHash.slice(0, 16)}${extension}`,
       );
-      await (IOUtils as any).write(imagePath, figure.bytes);
+      await mineruFileIO.write(imagePath, figure.bytes);
       this.throwIfCancelled();
       figureArtifacts.push({
         role: figure.kind,
@@ -611,7 +612,7 @@ export class MinerUConversionService {
     )
       throw new Error("Docker CLI 必须指向 docker 或 docker.exe");
     if (configured.includes("\\") || configured.includes("/")) {
-      if (!(await IOUtils.exists(configured)))
+      if (!(await mineruFileIO.exists(configured)))
         throw new Error(`Docker CLI 不存在：${configured}`);
       return configured;
     }
@@ -647,7 +648,7 @@ export class MinerUConversionService {
       !/(?:^|[\\/])Docker Desktop\.exe$/i.test(executable)
     )
       throw new Error("Docker Desktop 路径必须指向 Docker Desktop.exe");
-    if (!(await IOUtils.exists(executable)))
+    if (!(await mineruFileIO.exists(executable)))
       throw new Error(`Docker Desktop 不存在：${executable}`);
     const process = await getSubprocess().call({
       command: executable,
@@ -668,7 +669,7 @@ export class MinerUConversionService {
       throw new Error("MinerU Docker 项目目录必须是本机绝对路径");
     let stat: { type?: string };
     try {
-      stat = (await (IOUtils as any).stat(directory)) as { type?: string };
+      stat = (await mineruFileIO.stat(directory)) as { type?: string };
     } catch (error) {
       throw new Error(`MinerU Docker 项目目录不存在：${directory}`, {
         cause: error,
@@ -680,7 +681,7 @@ export class MinerUConversionService {
     let composeFile = "";
     for (const candidate of candidates) {
       const path = PathUtils.join(directory, candidate);
-      if (await IOUtils.exists(path)) {
+      if (await mineruFileIO.exists(path)) {
         composeFile = path;
         break;
       }
@@ -748,7 +749,7 @@ export class MinerUConversionService {
         uploadUrl,
         {
           method: "PUT",
-          body: await IOUtils.read(pdfPath),
+          body: await mineruFileIO.read(pdfPath),
         },
         remainingTimeout(deadline),
         this.controller?.signal,
@@ -1079,7 +1080,7 @@ export class MinerUConversionService {
     this.controller = createCompatibleAbortController();
     const deadline = Date.now() + this.profile.timeoutMs;
     try {
-      const bytes = await IOUtils.read(pdfPath);
+      const bytes = await mineruFileIO.read(pdfPath);
       const fileName = safeFilename(pdfPath);
       const taskResult = await this.convertWithV1TasksApi(
         bytes,
@@ -1326,10 +1327,8 @@ export async function findLlmForZoteroMineruCache(
   );
   const fullMdPath = PathUtils.join(itemDir, "full.md");
   try {
-    if (!(await IOUtils.exists(fullMdPath))) return "";
-    const markdown = toText(
-      await Zotero.File.getContentsAsync(fullMdPath, "utf-8"),
-    );
+    if (!(await mineruFileIO.exists(fullMdPath))) return "";
+    const markdown = toText(await mineruFileIO.readUTF8(fullMdPath));
     if (!markdown.trim()) return "";
     return itemDir;
   } catch {
@@ -1346,9 +1345,7 @@ export async function mineruResultFromLlmForZoteroCache(
   itemDir: string,
 ): Promise<MinerUConversionResult> {
   const fullMdPath = PathUtils.join(itemDir, "full.md");
-  const markdown = toText(
-    await Zotero.File.getContentsAsync(fullMdPath, "utf-8"),
-  );
+  const markdown = toText(await mineruFileIO.readUTF8(fullMdPath));
   if (!markdown.trim())
     throw new Error("llm-for-zotero MinerU 缓存中没有 Markdown");
   const paths = await findFiles(itemDir, () => true);
@@ -1366,7 +1363,7 @@ export async function mineruResultFromLlmForZoteroCache(
     try {
       rows = mineruContentRows(
         JSON.parse(
-          toText(await Zotero.File.getContentsAsync(manifestPath, "utf-8")),
+          toText(await mineruFileIO.readUTF8(manifestPath)),
         ) as unknown,
       );
     } catch {
@@ -1384,7 +1381,7 @@ export async function mineruResultFromLlmForZoteroCache(
       if (!imagePath) continue;
       figureMap.set(descriptor.id, {
         ...descriptor,
-        bytes: await IOUtils.read(imagePath),
+        bytes: await mineruFileIO.read(imagePath),
       });
     }
   }
@@ -1413,7 +1410,7 @@ export async function mineruResultFromDirectory(
     try {
       rows = mineruContentRows(
         JSON.parse(
-          toText(await Zotero.File.getContentsAsync(manifestPath, "utf-8")),
+          toText(await mineruFileIO.readUTF8(manifestPath)),
         ) as unknown,
       );
     } catch {
@@ -1431,12 +1428,12 @@ export async function mineruResultFromDirectory(
       if (!imagePath) continue;
       figureMap.set(descriptor.id, {
         ...descriptor,
-        bytes: await IOUtils.read(imagePath),
+        bytes: await mineruFileIO.read(imagePath),
       });
     }
   }
   return {
-    markdown: toText(await Zotero.File.getContentsAsync(selected, "utf-8")),
+    markdown: toText(await mineruFileIO.readUTF8(selected)),
     figures: [...figureMap.values()],
   };
 }
@@ -1854,7 +1851,7 @@ function mineruFigureDescriptor(
   if (!imageName) return undefined;
   const kind = sourceKind === "table" ? "table" : "figure";
   return {
-    id: `mineru:${kind}:${encodeURIComponent(imagePath)}`,
+    id: `mineru:${kind}:${encodeURIComponent(normalizeArchivePath(String(row.zrdb_original_img_path || imagePath)))}`,
     kind,
     caption: mineruCaption(row, sourceKind),
     pageIndex: Math.max(0, Math.floor(Number(row.page_idx) || 0)),
@@ -1958,10 +1955,10 @@ async function findFiles(
   depth = 0,
 ): Promise<string[]> {
   if (depth > 8) return [];
-  const paths = await (IOUtils as any).getChildren(directory);
+  const paths = await mineruFileIO.getChildren(directory);
   const output: string[] = [];
   for (const path of paths) {
-    const stat = await (IOUtils as any).stat(path);
+    const stat = await mineruFileIO.stat(path);
     if (stat.type === "directory")
       output.push(...(await findFiles(path, accept, depth + 1)));
     else if (accept(path)) output.push(path);
@@ -2158,7 +2155,7 @@ async function findDockerDesktopExecutable(): Promise<string> {
   };
   const candidates = dockerDesktopExecutableCandidates(platform, environment);
   for (const candidate of candidates) {
-    if (await IOUtils.exists(candidate)) return candidate;
+    if (await mineruFileIO.exists(candidate)) return candidate;
   }
   throw new Error(
     "未找到 Docker Desktop；请安装 Docker Desktop，或在设置中填写其可执行文件路径",

@@ -1107,6 +1107,7 @@ describe("MinerU integration", function () {
   });
 
   it("throws when the cached full.md is empty", async function () {
+    const restoreIO = replaceGlobal("IOUtils", { readUTF8: async () => "  " });
     const restoreZotero = replaceGlobal("Zotero", {
       File: { getContentsAsync: async () => "  " },
     });
@@ -1119,6 +1120,7 @@ describe("MinerU integration", function () {
     } catch (error) {
       expect((error as Error).message).to.include("没有 Markdown");
     } finally {
+      restoreIO();
       restorePath();
       restoreZotero();
     }

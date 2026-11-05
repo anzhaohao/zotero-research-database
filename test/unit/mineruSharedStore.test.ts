@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import JSZip from "jszip";
+import { mineruAssetHash } from "../../src/services/mineruAssets";
 import {
   mkdir,
   mkdtemp,
@@ -76,6 +77,7 @@ describe("shared MinerU store", function () {
         },
       }),
       replaceGlobal("IOUtils", {
+        readUTF8: (filePath: string) => readFile(filePath, "utf8"),
         exists: async (filePath: string) => {
           try {
             await stat(filePath);
@@ -204,7 +206,9 @@ describe("shared MinerU store", function () {
     ).to.equal(paperDirectory);
     expect(
       await readFile(path.join(paperDirectory, "full.md"), "utf8"),
-    ).to.equal("![plot](raw/paper/images/plot.png)\n\nBody");
+    ).to.equal(
+      `![plot](<images/${await mineruAssetHash(Uint8Array.from([1, 2, 3]))}.png>)\n\nBody`,
+    );
     expect(
       new Uint8Array(
         await readFile(path.join(paperDirectory, "raw", "result.zip")),
@@ -246,11 +250,17 @@ describe("shared MinerU store", function () {
       );
       expect(
         await readFile(path.join(paperDirectory, "full.md"), "utf8"),
-      ).to.equal("![plot](raw/paper/images/plot.png)\n\nBody");
+      ).to.equal(
+        `![plot](<images/${await mineruAssetHash(Uint8Array.from([1, 2, 3]))}.png>)\n\nBody`,
+      );
       expect(
         new Uint8Array(
           await readFile(
-            path.join(paperDirectory, "raw", "paper", "images", "plot.png"),
+            path.join(
+              paperDirectory,
+              "images",
+              `${await mineruAssetHash(Uint8Array.from([1, 2, 3]))}.png`,
+            ),
           ),
         ),
       ).to.deep.equal(Uint8Array.from([1, 2, 3]));
@@ -352,6 +362,32 @@ describe("shared MinerU store", function () {
     );
     expect(await findSharedMinerUCache(root, identity.pdfSha256)).to.equal("");
     expect(await readdir(path.join(root, "papers"))).to.deep.equal([]);
+  });
+
+  it("preserves the old generation when a new image is missing or index commit fails", async function () {
+    const directory = await writeResult("# Stable");
+    await expectRejection(
+      writeResult("![missing](images/absent.png)", true),
+      "图片引用缺失",
+    );
+    expect(await readFile(path.join(directory, "full.md"), "utf8")).to.equal(
+      "# Stable",
+    );
+    failNextCommit = (target) =>
+      target.endsWith(path.join("index", "1-PDFKEY12.json"));
+    await expectRejection(
+      writeResult("# New", true),
+      "injected commit failure",
+    );
+    expect(await findSharedMinerUCache(root, identity.pdfSha256)).to.equal(
+      directory,
+    );
+    expect(await readFile(path.join(directory, "full.md"), "utf8")).to.equal(
+      "# Stable",
+    );
+    expect(await readdir(path.join(root, "papers"))).to.deep.equal([
+      identity.pdfSha256,
+    ]);
   });
 
   it("rewrites only local Markdown image targets", function () {

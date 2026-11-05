@@ -1,5 +1,4 @@
 pref("enable", true);
-pref("artifactImportToken", "");
 pref("artifactMetadataMigrationVersion", 0);
 pref("artifactStorageRoot", "");
 pref("dataRoot", "");
@@ -24,6 +23,7 @@ pref("zoteroFigureShowFormulas", true);
 pref("mineruFigureFallback", true);
 pref("figureImageQuality", "high");
 pref("agentKind", "codex-cli");
+pref("localHarnesses", "[]");
 pref("agentExecutable", "");
 pref("agentArgs", "");
 pref("agentEndpoint", "http://127.0.0.1:11434");

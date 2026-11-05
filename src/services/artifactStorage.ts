@@ -1,3 +1,4 @@
+import { mineruFileIO } from "./mineruFileIO";
 import type { ManagedArtifact } from "../domain/types";
 import type { ResearchRepository } from "../storage/repository";
 import { getResearchRepository } from "../storage/repositoryScope";
@@ -242,10 +243,10 @@ export async function readArtifactStorageManifest(
   assertItemKey(itemKey);
   const directory = itemDirectory(root, itemKey);
   const path = PathUtils.join(directory, ARTIFACT_STORAGE_MANIFEST);
-  if (!(await IOUtils.exists(path))) {
+  if (!(await mineruFileIO.exists(path))) {
     return { schemaVersion: 1, itemKey, files: [], updatedAt: "" };
   }
-  const bytes = await IOUtils.read(path);
+  const bytes = await mineruFileIO.read(path);
   return parseArtifactStorageManifest(new TextDecoder().decode(bytes), itemKey);
 }
 
@@ -284,7 +285,7 @@ export async function createManagedAttachmentUnlocked(
   }
 
   const directory = itemDirectory(root, parent.key);
-  await IOUtils.makeDirectory(directory, {
+  await mineruFileIO.makeDirectory(directory, {
     createAncestors: true,
     ignoreExisting: true,
   });
@@ -301,7 +302,7 @@ export async function createManagedAttachmentUnlocked(
   );
   if (
     samePathEntry &&
-    (await IOUtils.exists(
+    (await mineruFileIO.exists(
       absoluteArtifactPath(root, samePathEntry.relativePath),
     ))
   ) {
@@ -313,7 +314,7 @@ export async function createManagedAttachmentUnlocked(
       const existingPath = await existing.getFilePathAsync();
       if (
         typeof existingPath === "string" &&
-        (await IOUtils.exists(existingPath))
+        (await mineruFileIO.exists(existingPath))
       ) {
         return {
           attachment: existing,
@@ -330,7 +331,7 @@ export async function createManagedAttachmentUnlocked(
     ),
   );
   let targetPath = PathUtils.join(directory, fileName);
-  if (await IOUtils.exists(targetPath)) {
+  if (await mineruFileIO.exists(targetPath)) {
     const existingHash = await sha256File(targetPath);
     if (existingHash !== sha256 || !samePathEntry) {
       occupied.add(fileName);
@@ -342,7 +343,7 @@ export async function createManagedAttachmentUnlocked(
       targetPath = PathUtils.join(directory, fileName);
     }
   }
-  const targetExistedBeforeCopy = await IOUtils.exists(targetPath);
+  const targetExistedBeforeCopy = await mineruFileIO.exists(targetPath);
   if (!targetExistedBeforeCopy) {
     await copyFile(sourcePath, targetPath);
   }
@@ -353,7 +354,11 @@ export async function createManagedAttachmentUnlocked(
       throw new Error(`复制产物后哈希校验失败：${sourcePath}`);
     }
 
-    attachment = await linkArtifactFile(targetPath, parent, title || fileName);
+    attachment = await createArtifactAttachment(
+      targetPath,
+      parent,
+      title || fileName,
+    );
     const relativePath = buildArtifactRelativePath(parent.key, fileName);
     const nextEntry: ArtifactStorageManifestEntry = {
       relativePath,
@@ -385,7 +390,7 @@ export async function createManagedAttachmentUnlocked(
     }
     if (!targetExistedBeforeCopy) {
       try {
-        await IOUtils.remove(targetPath, { ignoreAbsent: true });
+        await mineruFileIO.remove(targetPath, { ignoreAbsent: true });
       } catch {
         // Preserve the original error; a later integrity scan can clean it.
       }
@@ -400,7 +405,7 @@ export async function migrateStoredArtifacts(
 ): Promise<ArtifactMigrationResult> {
   const root = normalizeStorageRoot(getArtifactStorageRoot());
   if (!root) throw new Error("请先设置研究产物根目录");
-  await IOUtils.makeDirectory(root, {
+  await mineruFileIO.makeDirectory(root, {
     createAncestors: true,
     ignoreExisting: true,
   });
@@ -498,7 +503,7 @@ export async function relocateArtifactStorageRoot(
   const destination = normalizeStorageRoot(destinationRoot);
   if (!source || !destination)
     throw new Error("产物迁移需要有效的源目录和目标目录");
-  await IOUtils.makeDirectory(destination, {
+  await mineruFileIO.makeDirectory(destination, {
     createAncestors: true,
     ignoreExisting: true,
   });
@@ -521,7 +526,7 @@ export async function relocateArtifactStorageRoot(
           item.key,
         );
         const destinationDirectory = itemDirectory(destination, item.key);
-        await IOUtils.makeDirectory(destinationDirectory, {
+        await mineruFileIO.makeDirectory(destinationDirectory, {
           createAncestors: true,
           ignoreExisting: true,
         });
@@ -533,7 +538,7 @@ export async function relocateArtifactStorageRoot(
         const nextFiles: ArtifactStorageManifestEntry[] = [];
         for (const entry of manifest.files) {
           const sourcePath = absoluteArtifactPath(source, entry.relativePath);
-          if (!(await IOUtils.exists(sourcePath))) {
+          if (!(await mineruFileIO.exists(sourcePath))) {
             result.broken += 1;
             continue;
           }
@@ -546,7 +551,7 @@ export async function relocateArtifactStorageRoot(
             destinationDirectory,
             fileName,
           );
-          if (!(await IOUtils.exists(destinationPath))) {
+          if (!(await mineruFileIO.exists(destinationPath))) {
             await copyFile(sourcePath, destinationPath);
           }
           if ((await sha256File(destinationPath)) !== entry.sha256) {
@@ -597,7 +602,7 @@ export async function relocateArtifactStorageRoot(
               existingDestination,
             );
           else
-            await IOUtils.remove(
+            await mineruFileIO.remove(
               PathUtils.join(destinationDirectory, ARTIFACT_STORAGE_MANIFEST),
               { ignoreAbsent: true },
             );
@@ -640,11 +645,11 @@ export async function rollbackManagedAttachments(
     for (const entry of removed) {
       const path = absoluteArtifactPath(root, entry.relativePath);
       if (
-        (await IOUtils.exists(path)) &&
+        (await mineruFileIO.exists(path)) &&
         !(await isFilesystemLink(path)) &&
         (await sha256File(path)) === entry.sha256
       ) {
-        await IOUtils.remove(path, { ignoreAbsent: true });
+        await mineruFileIO.remove(path, { ignoreAbsent: true });
       }
     }
   };
@@ -673,7 +678,7 @@ export async function scanBrokenArtifactLinks(
       );
       if (!attachment || !isLinkedFileAttachment(attachment)) continue;
       const path = await attachment.getFilePathAsync();
-      if (typeof path !== "string" || !(await IOUtils.exists(path))) {
+      if (typeof path !== "string" || !(await mineruFileIO.exists(path))) {
         broken.push({
           itemKey: item.key,
           attachmentKey: artifact.attachmentKey,
@@ -696,7 +701,7 @@ export async function cleanupOwnedArtifactDirectory(
   const directory = itemDirectory(root, itemKey);
   if (await isFilesystemLink(directory)) return;
   const manifestPath = PathUtils.join(directory, ARTIFACT_STORAGE_MANIFEST);
-  if (!(await IOUtils.exists(manifestPath))) return;
+  if (!(await mineruFileIO.exists(manifestPath))) return;
   if (await isFilesystemLink(manifestPath)) return;
   const manifest = await readArtifactStorageManifest(root, itemKey);
   for (const entry of manifest.files) {
@@ -705,21 +710,21 @@ export async function cleanupOwnedArtifactDirectory(
     if (
       !isWithinDirectory(path, directory) ||
       (await isFilesystemLink(path)) ||
-      !(await IOUtils.exists(path))
+      !(await mineruFileIO.exists(path))
     )
       continue;
     try {
       if ((await sha256File(path)) !== entry.sha256) continue;
-      await IOUtils.remove(path, { ignoreAbsent: true });
+      await mineruFileIO.remove(path, { ignoreAbsent: true });
     } catch {
       // A changed, unreadable, or non-regular path is user data until proven
       // to be the exact file recorded by the manifest.
     }
   }
-  await IOUtils.remove(manifestPath, { ignoreAbsent: true });
-  const children = await IOUtils.getChildren?.(directory);
+  await mineruFileIO.remove(manifestPath, { ignoreAbsent: true });
+  const children = await mineruFileIO.getChildren?.(directory);
   if (Array.isArray(children) && children.length === 0) {
-    await IOUtils.remove(directory, { ignoreAbsent: true });
+    await mineruFileIO.remove(directory, { ignoreAbsent: true });
   }
 }
 
@@ -729,7 +734,7 @@ export async function openArtifactStorageDirectory(
   const root = normalizeStorageRoot(getArtifactStorageRoot());
   if (!root) throw new Error("请先设置研究产物根目录");
   const directory = itemKey ? itemDirectory(root, itemKey) : root;
-  await IOUtils.makeDirectory(directory, {
+  await mineruFileIO.makeDirectory(directory, {
     createAncestors: true,
     ignoreExisting: true,
   });
@@ -792,7 +797,7 @@ export function unregisterArtifactStorageNotifier(
 }
 
 export async function sha256File(path: string): Promise<string> {
-  const bytes = await IOUtils.read(path);
+  const bytes = await mineruFileIO.read(path);
   // @types/node 26 typed Uint8Array as Uint8Array<ArrayBufferLike>; IOUtils
   // always returns a plain ArrayBuffer view, so narrow it before hashing.
   const digest = await crypto.subtle.digest(
@@ -824,7 +829,7 @@ async function writeArtifactStorageManifest(
   manifest: ArtifactStorageManifest,
 ): Promise<void> {
   const directory = itemDirectory(root, itemKey);
-  await IOUtils.makeDirectory(directory, {
+  await mineruFileIO.makeDirectory(directory, {
     createAncestors: true,
     ignoreExisting: true,
   });
@@ -840,29 +845,29 @@ async function writeArtifactStorageManifest(
     .slice(2)}`;
   const encoded = JSON.stringify(normalized, null, 2);
   try {
-    await IOUtils.writeUTF8(temporaryPath, encoded);
+    await mineruFileIO.writeUTF8(temporaryPath, encoded);
     const written = parseArtifactStorageManifest(
-      new TextDecoder().decode(await IOUtils.read(temporaryPath)),
+      new TextDecoder().decode(await mineruFileIO.read(temporaryPath)),
       itemKey,
     );
     if (JSON.stringify(written.files) !== JSON.stringify(normalized.files)) {
       throw new Error("产物清单写入校验失败");
     }
     if (typeof (IOUtils as any).move === "function") {
-      await (IOUtils as any).move(temporaryPath, manifestPath, {
+      await mineruFileIO.move(temporaryPath, manifestPath, {
         noOverwrite: false,
       });
     } else if (typeof (IOUtils as any).copy === "function") {
-      await (IOUtils as any).copy(temporaryPath, manifestPath);
-      await IOUtils.remove(temporaryPath, { ignoreAbsent: true });
+      await mineruFileIO.copy(temporaryPath, manifestPath);
+      await mineruFileIO.remove(temporaryPath, { ignoreAbsent: true });
     } else {
-      await IOUtils.writeUTF8(manifestPath, encoded);
-      await IOUtils.remove(temporaryPath, { ignoreAbsent: true });
+      await mineruFileIO.writeUTF8(manifestPath, encoded);
+      await mineruFileIO.remove(temporaryPath, { ignoreAbsent: true });
     }
   } catch (error) {
-    await IOUtils.remove(temporaryPath, { ignoreAbsent: true }).catch(
-      () => undefined,
-    );
+    await mineruFileIO
+      .remove(temporaryPath, { ignoreAbsent: true })
+      .catch(() => undefined);
     throw error;
   }
 }
@@ -883,6 +888,22 @@ async function linkArtifactFile(
     file: path,
     parentItemID: parent.id,
     title,
+    // Avoid Zotero's MIME probe reopening a long path without its native prefix.
+    contentType: /\.md$/i.test(path)
+      ? "text/markdown"
+      : /\.jpe?g$/i.test(path)
+        ? "image/jpeg"
+        : /\.png$/i.test(path)
+          ? "image/png"
+          : /\.webp$/i.test(path)
+            ? "image/webp"
+            : /\.gif$/i.test(path)
+              ? "image/gif"
+              : /\.tiff?$/i.test(path)
+                ? "image/tiff"
+                : /\.bmp$/i.test(path)
+                  ? "image/bmp"
+                  : undefined,
   });
   if (!isLinkedFileAttachment(attachment)) {
     try {
@@ -893,7 +914,10 @@ async function linkArtifactFile(
     throw new Error("Zotero 创建的产物附件不是 linked file");
   }
   const linkedPath = await attachment.getFilePathAsync();
-  if (typeof linkedPath !== "string" || !(await IOUtils.exists(linkedPath))) {
+  if (
+    typeof linkedPath !== "string" ||
+    !(await mineruFileIO.exists(linkedPath))
+  ) {
     try {
       await attachment.eraseTx();
     } catch {
@@ -902,6 +926,77 @@ async function linkArtifactFile(
     throw new Error("Zotero 创建的 linked file 无法回读");
   }
   return attachment;
+}
+
+/**
+ * Zotero can link ordinary paths, but its attachment bookkeeping still uses
+ * unprefixed OS.File calls. Those calls fail once a shared research root grows
+ * beyond the Windows MAX_PATH boundary. Keep the source in the shared folder,
+ * then import a short staged copy into Zotero storage when linking is not
+ * reliable. The manifest continues to point at the shared source path.
+ */
+async function createArtifactAttachment(
+  sourcePath: string,
+  parent: Zotero.Item,
+  title: string,
+): Promise<Zotero.Item> {
+  const contentType = contentTypeForArtifactPath(sourcePath);
+  try {
+    return await linkArtifactFile(sourcePath, parent, title);
+  } catch (linkError) {
+    const stagedPath = createShortImportPath(sourcePath);
+    try {
+      await copyFile(sourcePath, stagedPath);
+      return await Zotero.Attachments.importFromFile({
+        file: stagedPath,
+        parentItemID: parent.id,
+        title,
+        ...(contentType ? { contentType } : {}),
+      });
+    } catch (importError) {
+      const linkMessage =
+        linkError instanceof Error ? linkError.message : String(linkError);
+      const importMessage =
+        importError instanceof Error
+          ? importError.message
+          : String(importError);
+      throw new Error(
+        "产物附件创建失败（linked: " +
+          linkMessage +
+          "; stored: " +
+          importMessage +
+          "）",
+        { cause: importError },
+      );
+    } finally {
+      await mineruFileIO
+        .remove(stagedPath, { ignoreAbsent: true })
+        .catch(() => undefined);
+    }
+  }
+}
+
+function createShortImportPath(sourcePath: string): string {
+  const extension =
+    (PathUtils.filename(sourcePath) || "")
+      .match(/\.[^.]+$/)?.[0]
+      .slice(0, 12) || ".bin";
+  const suffix = Math.random().toString(36).slice(2, 10);
+  return PathUtils.join(
+    PathUtils.tempDir,
+    "zrdb-artifact-" + Date.now() + "-" + suffix + extension,
+  );
+}
+
+function contentTypeForArtifactPath(path: string): string | undefined {
+  if (/\.md$/i.test(path)) return "text/markdown";
+  if (/\.jpe?g$/i.test(path)) return "image/jpeg";
+  if (/\.png$/i.test(path)) return "image/png";
+  if (/\.webp$/i.test(path)) return "image/webp";
+  if (/\.gif$/i.test(path)) return "image/gif";
+  if (/\.tiff?$/i.test(path)) return "image/tiff";
+  if (/\.bmp$/i.test(path)) return "image/bmp";
+  return undefined;
 }
 
 async function getAttachmentByKey(
@@ -979,7 +1074,7 @@ async function chooseAvailableArtifactFileName(
   occupied: Set<string>,
 ): Promise<string> {
   let candidate = chooseArtifactFileName(desiredName, occupied);
-  while (await IOUtils.exists(PathUtils.join(directory, candidate))) {
+  while (await mineruFileIO.exists(PathUtils.join(directory, candidate))) {
     occupied.add(candidate);
     candidate = chooseArtifactFileName(desiredName, occupied);
   }
@@ -989,13 +1084,13 @@ async function chooseAvailableArtifactFileName(
 async function copyFile(sourcePath: string, targetPath: string): Promise<void> {
   const ioUtils = IOUtils;
   if (typeof ioUtils.copy === "function") {
-    await ioUtils.copy(sourcePath, targetPath);
+    await mineruFileIO.copy(sourcePath, targetPath);
     return;
   }
   if (typeof ioUtils.write !== "function") {
     throw new Error("当前 Zotero 不支持复制产物文件");
   }
-  await ioUtils.write(targetPath, await IOUtils.read(sourcePath));
+  await mineruFileIO.write(targetPath, await mineruFileIO.read(sourcePath));
 }
 
 function isWithinDirectory(path: string, directory: string): boolean {

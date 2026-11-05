@@ -1,4 +1,6 @@
 import { readMinerUArchiveEntries } from "./mineruArchive";
+import { mineruFileIO } from "./mineruFileIO";
+import { prepareMinerUAssets, validateMinerUStoragePath } from "./mineruAssets";
 import type { MinerUConversionResult, MinerUMode } from "./mineru";
 
 const SHARED_STORE_SCHEMA_VERSION = 1;
@@ -18,7 +20,7 @@ interface SharedMinerUManifest {
   rawDirectory: string;
   sourceMode: MinerUMode | "cache-import";
   createdAt: string;
-  files: Array<{ path: string; size: number }>;
+  files: Array<{ path: string; size: number; originalPaths?: string[] }>;
 }
 
 export interface SharedMinerUClaim {
@@ -28,7 +30,7 @@ export interface SharedMinerUClaim {
 }
 
 function sharedIO(): any {
-  return IOUtils as any;
+  return mineruFileIO;
 }
 
 function sharedNonce(): string {
@@ -74,9 +76,10 @@ export function sharedMinerUPaperDirectory(
 }
 
 async function readJSON(path: string): Promise<Record<string, any>> {
-  return JSON.parse(
-    sharedText(await Zotero.File.getContentsAsync(path, "utf-8")),
-  ) as Record<string, any>;
+  return JSON.parse(sharedText(await sharedIO().readUTF8(path))) as Record<
+    string,
+    any
+  >;
 }
 
 /** Return only a complete, readable cache generation. */
@@ -120,9 +123,7 @@ async function completeSharedMinerUCache(
         return "";
     }
     const markdownPath = PathUtils.join(paperDirectory, "full.md");
-    const markdown = sharedText(
-      await Zotero.File.getContentsAsync(markdownPath, "utf-8"),
-    );
+    const markdown = sharedText(await sharedIO().readUTF8(markdownPath));
     return markdown.trim() ? paperDirectory : "";
   } catch {
     return "";
@@ -192,9 +193,17 @@ async function writeBytes(
   const normalized = normalizeRelativePath(relativePath);
   if (!normalized) throw new Error("MinerU 产物包含不安全的路径");
   const target = PathUtils.join(root, ...normalized.split("/"));
+  validateMinerUStoragePath(normalized);
   const parent = PathUtils.join(root, ...normalized.split("/").slice(0, -1));
-  await sharedIO().makeDirectory(parent, { ignoreExisting: true });
-  await sharedIO().write(target, bytes, { overwrite: true });
+  try {
+    await sharedIO().makeDirectory(parent, { ignoreExisting: true });
+    await sharedIO().write(target, bytes, { overwrite: true });
+  } catch (error) {
+    throw new Error(
+      `MinerU 写入失败：${target}\n${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   return { path: normalized, size: bytes.byteLength };
 }
 
@@ -271,13 +280,14 @@ export async function writeSharedMinerUResult(options: {
     ignoreExisting: true,
   });
   const nonce = sharedNonce();
-  const staging = paperDirectory + ".tmp-" + nonce;
-  const previous = paperDirectory + ".old-" + nonce;
-  const files: Array<{ path: string; size: number }> = [];
+  const staging = PathUtils.join(root, "papers", ".tmp-" + nonce);
+  const previous = PathUtils.join(root, "papers", ".old-" + nonce);
+  const files: SharedMinerUManifest["files"] = [];
   let movedPrevious = false;
   try {
     await sharedIO().makeDirectory(staging, { ignoreExisting: false });
     let markdownSourcePath = result.markdownArchivePath || "full.md";
+    const entries: Array<{ name: string; bytes: Uint8Array }> = [];
     if (result.archive?.byteLength) {
       const archiveEntries =
         result.archiveEntries ||
@@ -286,7 +296,7 @@ export async function writeSharedMinerUResult(options: {
         const relative = normalizeRelativePath(entry.name);
         if (!relative || relative.toLocaleLowerCase() === "result.zip")
           throw new Error("MinerU ZIP 包含无效或冲突路径");
-        files.push(await writeBytes(staging, "raw/" + relative, entry.bytes));
+        entries.push({ name: relative, bytes: entry.bytes });
       }
       if (!archiveEntries.some((entry) => entry.name === markdownSourcePath)) {
         const candidate = archiveEntries.find((entry) =>
@@ -295,42 +305,34 @@ export async function writeSharedMinerUResult(options: {
         if (!candidate) throw new Error("MinerU ZIP 中没有 Markdown");
         markdownSourcePath = candidate.name;
       }
-      files.push(await writeBytes(staging, "raw/result.zip", result.archive));
     } else if (sourceDirectory) {
       for (const path of await listFiles(sourceDirectory)) {
         const relative = localRelativePath(sourceDirectory, path);
         if (!relative) continue;
-        files.push(
-          await writeBytes(
-            staging,
-            "raw/" + relative,
-            await sharedIO().read(path),
-          ),
-        );
+        if (relative !== "result.zip")
+          entries.push({ name: relative, bytes: await sharedIO().read(path) });
       }
       markdownSourcePath = "full.md";
     } else {
-      for (const [index, figure] of result.figures.entries()) {
-        const name = PathUtils.filename(figure.imageName) || "figure-" + index;
-        files.push(
-          await writeBytes(
-            staging,
-            "images/" + (index + 1) + "-" + name,
-            figure.bytes,
-          ),
-        );
-      }
+      for (const figure of result.figures)
+        entries.push({ name: figure.imageName, bytes: figure.bytes });
       markdownSourcePath = "full.md";
     }
-    files.push(
-      await writeText(
-        staging,
-        "full.md",
-        result.archive || sourceDirectory
-          ? rewriteSharedMinerUMarkdown(result.markdown, markdownSourcePath)
-          : result.markdown,
-      ),
+    const prepared = await prepareMinerUAssets(
+      entries,
+      result.markdown,
+      markdownSourcePath,
     );
+    // Validate every component before any generation file is written.
+    for (const entry of prepared.files) {
+      files.push({
+        ...(await writeBytes(staging, entry.path, entry.bytes)),
+        originalPaths: entry.originalPaths,
+      });
+    }
+    if (result.archive?.byteLength)
+      files.push(await writeBytes(staging, "raw/result.zip", result.archive));
+    files.push(await writeText(staging, "full.md", prepared.markdown));
     const manifest: SharedMinerUManifest = {
       schemaVersion: SHARED_STORE_SCHEMA_VERSION,
       status: "complete",
@@ -348,7 +350,6 @@ export async function writeSharedMinerUResult(options: {
     );
     if (!(await completeSharedMinerUCache(staging, identity.pdfSha256)))
       throw new Error("新的 MinerU 共享产物未通过完整性校验");
-    await writeSharedMinerUIndex(root, identity, sourceMode);
     if (await sharedIO().exists(paperDirectory)) {
       if (!options.overwrite) {
         if (await findSharedMinerUCache(root, identity.pdfSha256)) {
@@ -368,6 +369,18 @@ export async function writeSharedMinerUResult(options: {
     } catch (error) {
       if (movedPrevious)
         await sharedIO().move(previous, paperDirectory, { overwrite: true });
+      movedPrevious = false;
+      throw error;
+    }
+    try {
+      await writeSharedMinerUIndex(root, identity, sourceMode);
+    } catch (error) {
+      await sharedIO().remove(paperDirectory, {
+        recursive: true,
+        ignoreAbsent: true,
+      });
+      if (movedPrevious)
+        await sharedIO().move(previous, paperDirectory, { overwrite: false });
       movedPrevious = false;
       throw error;
     }

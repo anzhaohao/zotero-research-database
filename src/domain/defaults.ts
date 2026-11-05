@@ -11,8 +11,6 @@ export const ARTIFACT_EXTRA_KEY = "ZRDB.Artifacts";
 export const PRIMARY_PDF_EXTRA_KEY = "ZRDB.PrimaryPDF";
 export const SYNCED_SETTING_PREFIX = "zoteroResearchDatabase";
 export const WORKSPACE_SYNCED_SETTING = `${SYNCED_SETTING_PREFIX}.workspace.v1`;
-export const API_ENDPOINT = "/zotero-research-db/v1/artifacts/import";
-export const API_TOKEN_PREF = "artifactImportToken";
 export const TRANSLATED_TITLE_FIELD_ID = "translated-title";
 
 export const LEGACY_BUILTIN_FIELD_PROMPTS: Record<string, string> = {

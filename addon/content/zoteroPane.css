@@ -8,6 +8,29 @@
   --zrdb-soft: color-mix(in srgb, Canvas 88%, #b9d1e8);
 }
 
+body.zrdb-native-tool-window {
+  display: block;
+  margin: 0;
+  padding: 16px;
+  box-sizing: border-box;
+  color: CanvasText;
+  background: Canvas;
+  font: 14px system-ui;
+}
+
+body.zrdb-native-tool-window .zrdb-native-tool-content {
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: Canvas;
+}
+
 .zrdb-view-switcher {
   display: inline-flex;
   align-items: center;
@@ -698,6 +721,9 @@ button.zrdb-view-toggle:active {
 
 .zrdb-tool-progress-list small {
   color: GrayText;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  user-select: text;
 }
 
 .zrdb-primary-pdf-section {
@@ -1559,6 +1585,26 @@ button.zrdb-view-toggle:active {
 }
 .zrdb-pref-section label.zrdb-agent-model-control {
   flex-wrap: wrap;
+}
+
+#zrdb-local-harness-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+#zrdb-local-harness-editor label {
+  flex-wrap: wrap;
+}
+
+#zrdb-local-harness-editor input,
+#zrdb-local-harness-editor select,
+#zrdb-local-harness-editor textarea {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  font: inherit;
 }
 .zrdb-agent-model-control select {
   min-width: 260px;

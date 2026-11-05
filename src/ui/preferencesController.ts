@@ -61,10 +61,16 @@ import {
   normalizeStorageRoot,
 } from "../services/artifactStorage";
 import {
-  ensureArtifactImportToken,
-  rotateArtifactImportToken,
-} from "../services/artifactEndpoint";
-import { copyPlainText } from "../services/clipboard";
+  LOCAL_HARNESS_KINDS,
+  localHarnessProvider,
+  readLocalHarnesses,
+  saveLocalHarness,
+  assistantKey,
+} from "../services/localHarness";
+import {
+  detectLocalHarness,
+  listLocalHarnessModels,
+} from "../services/localHarnessModels";
 import { showAgentError } from "./agentError";
 import {
   agentConcurrency,
@@ -136,6 +142,12 @@ function inputValue(root: Element, key: string): string | boolean {
   const control = root.querySelector(`[data-pref="${key}"]`) as
     HTMLInputElement | HTMLSelectElement | null;
   if (!control) return "";
+  if (key === "agentKind")
+    return (
+      (control as HTMLSelectElement).selectedOptions[0]?.getAttribute(
+        "data-kind",
+      ) || control.value
+    );
   return isCheckboxControl(control) ? control.checked : control.value;
 }
 
@@ -153,6 +165,8 @@ export class PreferencesController {
   private pendingAgentProviderID = "";
   private agentModelConcurrency: Record<string, number> = {};
   private agentConcurrencyKey = "";
+  private localHarnessID?: string;
+  private displayedAssistant = "";
 
   constructor(private win: Window) {}
 
@@ -166,13 +180,14 @@ export class PreferencesController {
     this.bindTabBar();
     this.populateFontOptions();
     this.loadLocalControls();
+    this.renderAssistantTypes();
     this.bindTypographyControls();
     this.loadAgentProviderControls();
     this.bindLocalControls();
     this.bindAgentProviderControls();
     this.bindAgentTests();
     this.bindAgentModelPicker();
-    this.bindArtifactImportToken();
+    this.bindLocalHarnessControls();
     this.bindModeControls();
     this.updateModeVisibility();
     this.workspace = await this.repository.loadWorkspace();
@@ -485,10 +500,20 @@ export class PreferencesController {
 
   private applyAgentProfileToControls(profile: AgentProfile): void {
     if (!this.root) return;
+    const harness = readLocalHarnesses().find(
+      (entry) => entry.id === profile.assistantID,
+    );
+    if (harness)
+      profile = {
+        ...profile,
+        kind: harness.kind,
+        executable: harness.executable,
+        args: harness.args,
+      };
     this.agentModelConcurrency = { ...profile.modelConcurrency };
     this.agentConcurrencyKey = "";
     const values = {
-      agentKind: profile.kind,
+      agentKind: assistantKey(profile),
       agentExecutable: profile.executable || "",
       agentArgs: JSON.stringify(profile.args || []),
       agentEndpoint: profile.endpoint || "",
@@ -504,6 +529,7 @@ export class PreferencesController {
       >(`[data-pref="${key}"]`);
       if (control) control.value = value;
     }
+    this.displayedAssistant = assistantKey(profile);
     this.syncAgentConcurrency();
   }
 
@@ -533,6 +559,10 @@ export class PreferencesController {
       ...this.profileFromControls(),
       id: current.id,
       name: current.name,
+      assistantProfiles: {
+        ...current.assistantProfiles,
+        [this.displayedAssistant]: this.profileFromControls(),
+      },
     };
     saveActiveAgentProvider(provider, providers);
     return provider;
@@ -614,8 +644,15 @@ export class PreferencesController {
     }
     this.agentProviderBusy = true;
     try {
+      const current = readAgentProviders().find(
+        (entry) => entry.id === this.agentProviderID,
+      );
       const provider = {
         ...this.profileFromControls(),
+        assistantProfiles: {
+          ...current?.assistantProfiles,
+          [this.displayedAssistant]: this.profileFromControls(),
+        },
         id: createID("agent-provider"),
         name,
       };
@@ -786,30 +823,276 @@ export class PreferencesController {
       });
   }
 
-  private bindArtifactImportToken(): void {
-    const token = this.root?.querySelector<HTMLInputElement>(
-      "#zrdb-artifact-import-token",
+  private harnessControl(
+    id: string,
+  ): HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement {
+    return this.root!.querySelector(`#zrdb-local-harness-${id}`)!;
+  }
+
+  private renderAssistantTypes(): void {
+    const select = this.root?.querySelector<HTMLSelectElement>(
+      '[data-pref="agentKind"]',
     );
-    const refresh = () => {
-      if (token) token.value = ensureArtifactImportToken();
-    };
-    refresh();
+    if (!select) return;
+    const current = select.value;
+    for (const option of select.querySelectorAll("option[data-local-harness]"))
+      option.remove();
+    for (const harness of readLocalHarnesses()) {
+      const option = this.win.document.createElement("option");
+      option.value = harness.id;
+      option.textContent = harness.name;
+      option.dataset.kind = harness.kind;
+      option.dataset.localHarness = "true";
+      select.append(option);
+    }
+    select.value = current;
+  }
+
+  private async changeAssistant(target: string): Promise<void> {
+    if (!this.root || this.agentProviderBusy) return;
+    const select = this.root.querySelector<HTMLSelectElement>(
+      '[data-pref="agentKind"]',
+    )!;
+    const old = this.displayedAssistant;
+    if (old === target) return;
+    this.agentProviderBusy = true;
+    try {
+      select.value = old;
+      const provider = this.saveCurrentAgentProvider();
+      const harness = readLocalHarnesses().find((entry) => entry.id === target);
+      const stored = provider.assistantProfiles?.[target];
+      const profile: AgentProfile =
+        stored ||
+        (harness
+          ? { ...harness, assistantID: harness.id }
+          : {
+              kind: target as AgentProfile["kind"],
+              args: [],
+              endpoint:
+                target === "openai-compatible"
+                  ? "https://api.openai.com/v1"
+                  : target === "ollama"
+                    ? "http://127.0.0.1:11434"
+                    : undefined,
+              timeoutMs: 900_000,
+            });
+      const next: SavedAgentProvider = {
+        ...profile,
+        modelConcurrency: {
+          ...provider.modelConcurrency,
+          ...profile.modelConcurrency,
+        },
+        assistantProfiles: provider.assistantProfiles,
+        id: provider.id,
+        name: provider.name,
+      };
+      if (!harness) delete next.assistantID;
+      saveActiveAgentProvider(next);
+      this.applyAgentProfileToControls(next);
+      this.updateModeVisibility();
+      void this.refreshAgentModelOptions();
+      await flushPortableSettings();
+    } catch (error) {
+      select.value = old;
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.agentProviderBusy = false;
+    }
+  }
+
+  private updateHarnessHelp(): void {
+    const kind = this.harnessControl("kind").value;
+    const builtin = ["codex-cli", "claude-code"].includes(kind);
+    this.root!.querySelector<HTMLElement>(
+      "#zrdb-local-harness-args-row",
+    )!.hidden = builtin;
+    this.root!.querySelector<HTMLElement>(
+      "#zrdb-local-harness-model-args-row",
+    )!.hidden = builtin;
+    this.root!.querySelector<HTMLElement>(
+      "#zrdb-local-harness-help",
+    )!.textContent = builtin
+      ? "程序位置可留空自动查找。请先在本机安装并登录；模型、思考强度和并发数保存后在当前供应商中调整。"
+      : kind === "custom-prompt-cli"
+        ? '需支持非交互调用并输出 JSON。默认从标准输入接收提示词；若通过参数传入，请使用 {prompt}。可选占位符：{model}、{effort}、{schema}。例如：["--print", "{prompt}"]。'
+        : '需按插件 JSON 协议工作：从标准输入读取 task、prompt、schema 等字段，并仅向标准输出返回 JSON；probe 请求应返回 {"ok":true}。';
+  }
+
+  private openHarnessEditor(edit: boolean): void {
+    try {
+      const previous = edit
+        ? readLocalHarnesses().find(
+            (entry) => entry.id === this.displayedAssistant,
+          ) || this.saveCurrentAgentProvider()
+        : undefined;
+      if (previous && !LOCAL_HARNESS_KINDS.includes(previous.kind as never))
+        return;
+      this.localHarnessID = previous?.id;
+      this.harnessControl("name").value = previous?.name || "";
+      this.harnessControl("kind").value = previous?.kind || "codex-cli";
+      this.harnessControl("path").value = previous?.executable || "";
+      this.harnessControl("args").value = JSON.stringify(previous?.args || []);
+      this.harnessControl("model-args").value = JSON.stringify(
+        readLocalHarnesses().find((entry) => entry.id === previous?.id)
+          ?.modelArgs || [],
+      );
+      this.root!.querySelector<HTMLElement>(
+        "#zrdb-local-harness-editor",
+      )!.hidden = false;
+      this.updateHarnessHelp();
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private bindLocalHarnessControls(): void {
     this.root
-      ?.querySelector("#zrdb-artifact-token-copy")
-      ?.addEventListener("click", () => {
-        void copyPlainText(
-          token?.value || ensureArtifactImportToken(),
-          this.win.document,
-        ).then((ok) =>
-          this.status(ok ? "接口令牌已复制" : "复制失败，请手动复制"),
-        );
+      ?.querySelector<HTMLButtonElement>("#zrdb-local-harness-detect")
+      ?.addEventListener("click", (event) => {
+        const button = event.currentTarget as HTMLButtonElement;
+        button.disabled = true;
+        void (async () => {
+          const messages: string[] = [];
+          for (const kind of ["codex-cli", "claude-code"] as const) {
+            try {
+              const path = await detectLocalHarness(kind);
+              const entries = readLocalHarnesses();
+              const previous = entries.find(
+                (entry) =>
+                  entry.kind === kind && entry.id.startsWith("detected-"),
+              );
+              saveLocalHarness(
+                localHarnessProvider({
+                  id: previous?.id || "detected-" + kind,
+                  name:
+                    kind === "codex-cli"
+                      ? "本机 Codex CLI"
+                      : "本机 Claude Code",
+                  kind,
+                  executable: path,
+                  args: "[]",
+                  previous,
+                }),
+              );
+              messages.push(`${kind}：${path}`);
+            } catch (error) {
+              messages.push(
+                `${kind}：${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+          this.renderAssistantTypes();
+          await flushPortableSettings();
+          this.status(messages.join("\n"));
+        })()
+          .catch((error) => this.status(String(error)))
+          .finally(() => {
+            button.disabled = false;
+          });
       });
     this.root
-      ?.querySelector("#zrdb-artifact-token-rotate")
+      ?.querySelector("#zrdb-local-harness-add")
+      ?.addEventListener("click", () => this.openHarnessEditor(false));
+    this.root
+      ?.querySelector("#zrdb-local-harness-edit")
+      ?.addEventListener("click", () => this.openHarnessEditor(true));
+    this.harnessControl("kind").addEventListener("change", () =>
+      this.updateHarnessHelp(),
+    );
+    this.root
+      ?.querySelector("#zrdb-local-harness-cancel")
       ?.addEventListener("click", () => {
-        if (token) token.value = rotateArtifactImportToken();
-        this.status("接口令牌已轮换；旧令牌立即失效");
+        this.root!.querySelector<HTMLElement>(
+          "#zrdb-local-harness-editor",
+        )!.hidden = true;
       });
+    this.root
+      ?.querySelector("#zrdb-local-harness-browse")
+      ?.addEventListener("click", () => {
+        void (async () => {
+          try {
+            const path = await new addon.data.ztoolkit.FilePicker(
+              "选择本机 CLI 程序",
+              "open",
+              undefined,
+              undefined,
+              this.win,
+            ).open();
+            if (path && !Array.isArray(path))
+              this.harnessControl("path").value = path;
+          } catch (error) {
+            this.status(error instanceof Error ? error.message : String(error));
+          }
+        })();
+      });
+    this.root
+      ?.querySelector("#zrdb-local-harness-save")
+      ?.addEventListener("click", () => {
+        void this.saveLocalHarness();
+      });
+  }
+
+  private async saveLocalHarness(): Promise<void> {
+    if (this.agentProviderBusy || !this.root) return;
+    this.agentProviderBusy = true;
+    const save = this.root.querySelector<HTMLButtonElement>(
+      "#zrdb-local-harness-save",
+    );
+    if (save) save.disabled = true;
+    try {
+      const assistants = readLocalHarnesses();
+      let previous = assistants.find(
+        (provider) => provider.id === this.localHarnessID,
+      );
+      if (previous?.id === this.displayedAssistant)
+        previous = {
+          ...this.profileFromControls(),
+          id: previous.id,
+          name: previous.name,
+        };
+      const provider = localHarnessProvider({
+        id: previous?.id || createID("local-cli"),
+        name: this.harnessControl("name").value,
+        kind: this.harnessControl("kind").value,
+        executable: this.harnessControl("path").value,
+        args: this.harnessControl("args").value,
+        previous,
+      });
+      const modelArgs: unknown = JSON.parse(
+        this.harnessControl("model-args").value || "[]",
+      );
+      if (
+        !Array.isArray(modelArgs) ||
+        modelArgs.some((arg) => typeof arg !== "string")
+      )
+        throw new Error("模型查询参数必须是 JSON 字符串数组");
+      saveLocalHarness({ ...provider, modelArgs });
+      const current = this.saveCurrentAgentProvider();
+      const next = {
+        ...provider,
+        id: current.id,
+        name: current.name,
+        assistantProfiles: current.assistantProfiles,
+        assistantID: provider.id,
+      };
+      saveActiveAgentProvider(next);
+      this.renderAssistantTypes();
+      this.applyAgentProfileToControls(next);
+      this.updateModeVisibility();
+      await flushPortableSettings();
+      this.root.querySelector<HTMLElement>(
+        "#zrdb-local-harness-editor",
+      )!.hidden = true;
+      this.status(
+        `已保存到助手并选择：${provider.name}。请点击“检查助手”验证登录和输出。`,
+      );
+      void this.refreshAgentModelOptions();
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.agentProviderBusy = false;
+      if (save) save.disabled = false;
+    }
   }
 
   private bindModeControls(): void {
@@ -817,28 +1100,7 @@ export class PreferencesController {
       '[data-pref="agentKind"]',
     );
     agentKind?.addEventListener("change", () => {
-      const kind = agentKind.value;
-      this.syncAgentConcurrency();
-      if (kind === "codex-cli" || kind === "claude-code") {
-        const executable = this.root?.querySelector<HTMLInputElement>(
-          '[data-pref="agentExecutable"]',
-        );
-        // A path for one CLI cannot be reused for the other. Blank means that
-        // the bridge will discover the selected CLI on this computer.
-        if (executable) executable.value = "";
-      }
-      if (kind === "ollama" || kind === "openai-compatible") {
-        const endpoint = this.root?.querySelector<HTMLInputElement>(
-          '[data-pref="agentEndpoint"]',
-        );
-        if (endpoint)
-          endpoint.value =
-            kind === "openai-compatible"
-              ? "https://api.openai.com/v1"
-              : "http://127.0.0.1:11434";
-      }
-      this.updateModeVisibility();
-      void this.refreshAgentModelOptions(true);
+      void this.changeAssistant(agentKind.value);
     });
     this.root
       ?.querySelector('[data-pref="mineruMode"]')
@@ -870,9 +1132,17 @@ export class PreferencesController {
     });
     input.addEventListener("change", () => this.syncAgentConcurrency());
     this.root
-      .querySelector("#zrdb-agent-model-refresh")
-      ?.addEventListener("click", () => {
-        void this.refreshAgentModelOptions();
+      .querySelector<HTMLButtonElement>("#zrdb-agent-model-refresh")
+      ?.addEventListener("click", (event) => {
+        const button = event.currentTarget as HTMLButtonElement;
+        button.disabled = true;
+        this.status("正在拉取当前助手的上游模型……");
+        void this.refreshAgentModelOptions(false, true)
+          .catch((error) => this.status(String(error)))
+          .finally(() => {
+            button.disabled = false;
+            this.status("模型查询已结束，请查看模型列表下方的结果。");
+          });
       });
     for (const selector of [
       '[data-pref="agentEndpoint"]',
@@ -889,7 +1159,10 @@ export class PreferencesController {
     void this.refreshAgentModelOptions();
   }
 
-  private async refreshAgentModelOptions(resetModel = false): Promise<void> {
+  private async refreshAgentModelOptions(
+    resetModel = false,
+    upstream = false,
+  ): Promise<void> {
     if (!this.root) return;
     const input = this.root.querySelector<HTMLInputElement>(
       "#zrdb-agent-model-custom",
@@ -902,6 +1175,7 @@ export class PreferencesController {
       inputValue(this.root, "agentKind"),
     ) as AgentProfile["kind"];
     const providerID = this.agentProviderID;
+    const assistant = this.displayedAssistant;
     const requestId = ++this.agentModelRequestId;
     if (resetModel) input.value = "";
     this.syncAgentConcurrency();
@@ -943,7 +1217,7 @@ export class PreferencesController {
           codexHint ||
           modelLoadHint ||
           (kind === "openai-compatible"
-            ? "点击“刷新模型列表”读取服务可用模型，也可以手动填写模型 ID。"
+            ? "点击“拉取上游模型”读取服务可用模型，也可以手动填写模型 ID。"
             : "") ||
           (kind === "ollama"
             ? "可从本机 Ollama 读取模型；未启动服务时也可以手动填写。"
@@ -951,6 +1225,31 @@ export class PreferencesController {
     };
     // Replace the previous assistant's choices before any asynchronous probe.
     renderOptions();
+    if (upstream && LOCAL_HARNESS_KINDS.includes(kind as never)) {
+      try {
+        const harness = readLocalHarnesses().find(
+          (entry) => entry.id === assistant,
+        );
+        const models = await listLocalHarnessModels(
+          this.profileFromControls(),
+          harness?.modelArgs,
+        );
+        options = [
+          { value: "", label: "跟随 CLI 默认模型" },
+          ...models.map((value) => ({ value, label: value })),
+        ];
+        modelLoadHint = `已从当前助手读取 ${models.length} 个模型。`;
+      } catch (error) {
+        modelLoadHint = error instanceof Error ? error.message : String(error);
+      }
+      if (
+        requestId === this.agentModelRequestId &&
+        this.displayedAssistant === assistant &&
+        this.agentProviderID === providerID
+      )
+        renderOptions();
+      return;
+    }
     if (kind === "codex-cli") {
       const catalog = await readLocalCodexModelCatalog().catch(() => ({
         models: [],
@@ -1158,6 +1457,11 @@ export class PreferencesController {
       this.syncAgentConcurrency();
     }
     return parseAgentProfile({
+      assistantID: readLocalHarnesses().some(
+        (entry) => entry.id === this.displayedAssistant,
+      )
+        ? this.displayedAssistant
+        : undefined,
       kind: inputValue(this.root, "agentKind"),
       executable: inputValue(this.root, "agentExecutable"),
       args: inputValue(this.root, "agentArgs"),
