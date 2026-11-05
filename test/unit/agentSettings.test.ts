@@ -230,6 +230,38 @@ describe("external Agent settings", function () {
     ).to.equal("{not-json");
   });
 
+  it("keeps the same model's concurrency separate across saved suppliers", function () {
+    const key = JSON.stringify(["openai-compatible", "same-model"]);
+    const first = {
+      ...provider("default", "First", "same-model"),
+      modelConcurrency: { [key]: 2 },
+    };
+    const second = {
+      ...provider("second", "Second", "same-model"),
+      modelConcurrency: { [key]: 6 },
+    };
+    saveActiveAgentProvider(first);
+    saveActiveAgentProvider(second);
+    expect(switchAgentProvider("default").modelConcurrency).to.deep.equal({
+      [key]: 2,
+    });
+    expect(switchAgentProvider("second").modelConcurrency).to.deep.equal({
+      [key]: 6,
+    });
+    expect(
+      JSON.parse(
+        String(
+          prefs.get(
+            "extensions.zotero.zoteroResearchDatabase.agentModelConcurrency",
+          ),
+        ),
+      ),
+    ).to.deep.equal({ [key]: 6 });
+    expect(readAgentProviders()[0].modelConcurrency).to.deep.equal({
+      [key]: 2,
+    });
+  });
+
   it("rejects duplicate provider IDs and unknown switches", function () {
     const first = provider("same", "一", "a");
     saveActiveAgentProvider(first);

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { captureSubprocessOutput } from "./subprocessOutput";
 import { buildCodexWorkerConfig } from "./codexWorkerConfig";
+import { agentConcurrency } from "./agentConcurrency";
 import {
   readAgentAPIResponse,
   type AgentResponseProgress,
@@ -270,6 +271,7 @@ export interface AgentProfile {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
   apiProtocol?: AgentApiProtocol;
+  modelConcurrency?: Record<string, number>;
   timeoutMs: number;
 }
 
@@ -304,6 +306,7 @@ export class CodexAgentBridge implements AgentBridge {
   readonly kind = "codex-cli" as const;
   private running?: ProcessHandle;
   private version?: string;
+  private cancelled = false;
 
   constructor(
     private profile: Pick<
@@ -315,6 +318,7 @@ export class CodexAgentBridge implements AgentBridge {
   ) {}
 
   cancel(): void {
+    this.cancelled = true;
     if (this.running) void killAndWait(this.running);
   }
 
@@ -436,6 +440,7 @@ export class CodexAgentBridge implements AgentBridge {
     timeoutOverrideMs?: number,
   ): Promise<unknown> {
     if (this.running) throw new Error("已有 Codex 任务正在运行");
+    this.cancelled = false;
     const subprocess = getSubprocess();
     const executable = await resolveAgentExecutable(
       this.profile.executable,
@@ -466,6 +471,7 @@ export class CodexAgentBridge implements AgentBridge {
     const invoke = async (
       model: string | undefined,
     ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+      if (this.cancelled) throw new Error("Codex 任务已取消");
       const process = await subprocess.call({
         command: executable,
         arguments: buildCodexWorkerArguments(
@@ -485,6 +491,10 @@ export class CodexAgentBridge implements AgentBridge {
       });
       this.running = process;
       try {
+        if (this.cancelled) {
+          await killAndWait(process);
+          throw new Error("Codex 任务已取消");
+        }
         const stdout = captureSubprocessOutput(process.stdout);
         const stderr = captureSubprocessOutput(process.stderr);
         await process.stdin.write(prompt);
@@ -1111,7 +1121,10 @@ export class ConfiguredAgentBridge implements AgentBridge {
         }
       };
       await Promise.all(
-        Array.from({ length: Math.min(3, fields.length) }, worker),
+        Array.from(
+          { length: Math.min(agentConcurrency(this.profile), fields.length) },
+          worker,
+        ),
       );
       if (saveError) throw saveError;
       if (this.cancelled)
@@ -1327,11 +1340,160 @@ export class ConfiguredAgentBridge implements AgentBridge {
   }
 }
 
-export function createAgentBridge(profile: AgentProfile): AgentBridge {
+function createRawAgentBridge(profile: AgentProfile): AgentBridge {
   if (profile.kind === "codex-cli") return new CodexAgentBridge(profile);
   if (profile.kind === "claude-code") return new ClaudeCodeAgentBridge(profile);
   if (profile.kind === "hana-agent") return new HanaAgentBridge(profile);
   return new ConfiguredAgentBridge(profile);
+}
+
+/** Each field has its own disposable client; completed fields are saved at once. */
+export class ConcurrentAgentBridge implements AgentBridge {
+  private children = new Set<AgentBridge>();
+  private cancelled = false;
+  private extracting = false;
+  private delegate: AgentBridge;
+
+  constructor(
+    private profile: AgentProfile,
+    private factory: () => AgentBridge = () => createRawAgentBridge(profile),
+  ) {
+    this.delegate = factory();
+  }
+  get kind(): AgentAdapterKind {
+    return this.profile.kind;
+  }
+  cancel(): void {
+    this.cancelled = true;
+    this.delegate.cancel();
+    for (const child of this.children) child.cancel();
+  }
+  probe() {
+    return this.delegate.probe();
+  }
+  testStructuredOutput() {
+    return this.delegate.testStructuredOutput();
+  }
+  synthesizeComparison(
+    snapshot: ComparisonSnapshot,
+    definitions: FieldDefinition[],
+    instruction?: string,
+  ) {
+    return this.delegate.synthesizeComparison(
+      snapshot,
+      definitions,
+      instruction,
+    );
+  }
+  async extractFields(
+    fields: FieldDefinition[],
+    input: AgentInput,
+    onProgress?: (progress: AgentResponseProgress) => void,
+    onPartial?: (result: AgentResult<Record<string, unknown>>) => Promise<void>,
+  ): Promise<AgentResult<Record<string, unknown>>> {
+    if (this.extracting) throw new Error("当前助手已有字段提取任务正在运行");
+    this.extracting = true;
+    this.cancelled = false;
+    try {
+      if (fields.length <= 1)
+        return await this.delegate.extractFields(
+          fields,
+          input,
+          onProgress,
+          onPartial,
+        );
+      const pending = [...fields];
+      const combined: Record<string, unknown> = {};
+      const received = new Map<string, number>();
+      const failures: string[] = [];
+      let saveError: unknown;
+      let stop = false;
+      let executorVersion = "";
+      let saveQueue: Promise<unknown> = Promise.resolve();
+      const worker = async () => {
+        while (!this.cancelled && !stop && !saveError && pending.length) {
+          const field = pending.shift()!;
+          const child = this.factory();
+          this.children.add(child);
+          try {
+            const result = await child.extractFields(
+              [field],
+              input,
+              (progress) => {
+                received.set(field.id, progress.receivedCharacters);
+                onProgress?.({
+                  ...progress,
+                  receivedCharacters: [...received.values()].reduce(
+                    (sum, count) => sum + count,
+                    0,
+                  ),
+                });
+              },
+            );
+            const value = validateExtractedValues([field], result.value);
+            if (this.cancelled || saveError) break;
+            if (onPartial) {
+              try {
+                const saving = saveQueue.then(async () => {
+                  if (saveError) throw saveError;
+                  if (!this.cancelled) await onPartial({ ...result, value });
+                });
+                saveQueue = saving.catch(() => {});
+                await saving;
+              } catch (error) {
+                saveError = error;
+                for (const active of this.children) active.cancel();
+                break;
+              }
+            }
+            Object.assign(combined, value);
+            executorVersion = result.executorVersion;
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            failures.push(field.name + "：" + message);
+            if (
+              /\b(?:401|403|429|5\d\d)\b|authentication failed|model.*(?:not supported|not available)|timed?\s*out|超过.*秒/i.test(
+                message,
+              )
+            )
+              stop = true;
+          } finally {
+            this.children.delete(child);
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(agentConcurrency(this.profile), fields.length) },
+          worker,
+        ),
+      );
+      if (saveError) throw saveError;
+      if (this.cancelled)
+        throw new Error("AI 任务已取消；已完成字段保留，其余未写入");
+      if (failures.length)
+        throw new Error(
+          (onPartial && Object.keys(combined).length
+            ? "部分字段未完成，已成功保存的字段保留：\n"
+            : "AI 填充失败：\n") +
+            failures.join("\n") +
+            (pending.length
+              ? `\n另有 ${pending.length} 个字段尚未发送，请解决连接问题后重试。`
+              : ""),
+        );
+      return {
+        value: validateExtractedValues(fields, combined),
+        executorVersion,
+      };
+    } finally {
+      this.extracting = false;
+    }
+  }
+}
+
+export function createAgentBridge(profile: AgentProfile): AgentBridge {
+  return new ConcurrentAgentBridge(profile);
 }
 
 export type CompatibleWebSocketConstructor = new (

@@ -1,4 +1,5 @@
 import { getPref, setPref } from "../utils/prefs";
+import { parseModelConcurrency } from "./agentConcurrency";
 import {
   createAgentBridge,
   AGENT_REASONING_EFFORTS,
@@ -71,6 +72,7 @@ export interface AgentSettingsInput {
   model: unknown;
   reasoningEffort?: unknown;
   apiProtocol?: unknown;
+  modelConcurrency?: unknown;
   timeoutMs: unknown;
 }
 
@@ -106,6 +108,7 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
     ? (rawReasoningEffort as AgentReasoningEffort)
     : undefined;
   const rawProtocol = String(input.apiProtocol || "").trim();
+  const modelConcurrency = parseModelConcurrency(input.modelConcurrency);
   const apiProtocol: AgentApiProtocol | undefined =
     rawProtocol === "responses" || rawProtocol === "chat-completions"
       ? rawProtocol
@@ -124,6 +127,7 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
     model: String(input.model || "").trim() || undefined,
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(apiProtocol ? { apiProtocol } : {}),
+    ...(Object.keys(modelConcurrency).length ? { modelConcurrency } : {}),
     timeoutMs:
       Number.isFinite(timeoutMs) && timeoutMs >= 1000 ? timeoutMs : 900_000,
   };
@@ -139,6 +143,7 @@ function readLegacyAgentProfile(): AgentProfile {
     model: getPref("agentModel"),
     reasoningEffort: getPref("agentReasoningEffort"),
     apiProtocol: getPref("agentProtocol"),
+    modelConcurrency: getPref("agentModelConcurrency"),
     timeoutMs: getPref("agentTimeoutMs"),
   });
 }
@@ -155,6 +160,7 @@ function providerFromUnknown(value: unknown): SavedAgentProvider | undefined {
     model: entry.model,
     reasoningEffort: entry.reasoningEffort,
     apiProtocol: entry.apiProtocol,
+    modelConcurrency: entry.modelConcurrency,
     timeoutMs: entry.timeoutMs,
   });
   const id = String(entry.id || "").trim();
@@ -236,6 +242,10 @@ export function saveAgentProfile(profile: AgentProfile): void {
   setPref("agentModel", profile.model || "");
   setPref("agentReasoningEffort", profile.reasoningEffort || "");
   setPref("agentProtocol", profile.apiProtocol || "chat-completions");
+  setPref(
+    "agentModelConcurrency",
+    JSON.stringify(profile.modelConcurrency || {}),
+  );
   setPref("agentTimeoutMs", profile.timeoutMs);
 }
 

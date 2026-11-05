@@ -60,6 +60,11 @@ import {
 } from "../services/artifactEndpoint";
 import { copyPlainText } from "../services/clipboard";
 import { showAgentError } from "./agentError";
+import {
+  agentConcurrency,
+  agentModelKey,
+  parseAgentConcurrency,
+} from "../services/agentConcurrency";
 
 const prefKeys = [
   "defaultRowHeight",
@@ -139,6 +144,8 @@ export class PreferencesController {
   private agentProviderID = "";
   private agentProviderBusy = false;
   private pendingAgentProviderID = "";
+  private agentModelConcurrency: Record<string, number> = {};
+  private agentConcurrencyKey = "";
 
   constructor(private win: Window) {}
 
@@ -395,6 +402,8 @@ export class PreferencesController {
 
   private applyAgentProfileToControls(profile: AgentProfile): void {
     if (!this.root) return;
+    this.agentModelConcurrency = { ...profile.modelConcurrency };
+    this.agentConcurrencyKey = "";
     const values = {
       agentKind: profile.kind,
       agentExecutable: profile.executable || "",
@@ -412,6 +421,24 @@ export class PreferencesController {
       >(`[data-pref="${key}"]`);
       if (control) control.value = value;
     }
+    this.syncAgentConcurrency();
+  }
+
+  private syncAgentConcurrency(): void {
+    const control = this.root?.querySelector<HTMLInputElement>(
+      "#zrdb-agent-concurrency",
+    );
+    if (!control || !this.root) return;
+    if (this.agentConcurrencyKey && control.checkValidity())
+      this.agentModelConcurrency[this.agentConcurrencyKey] =
+        parseAgentConcurrency(control.value);
+    const profile = {
+      kind: String(inputValue(this.root, "agentKind")),
+      model: String(inputValue(this.root, "agentModel")),
+      modelConcurrency: this.agentModelConcurrency,
+    };
+    this.agentConcurrencyKey = agentModelKey(profile);
+    control.value = String(agentConcurrency(profile));
   }
 
   private saveCurrentAgentProvider(): SavedAgentProvider {
@@ -708,6 +735,7 @@ export class PreferencesController {
     );
     agentKind?.addEventListener("change", () => {
       const kind = agentKind.value;
+      this.syncAgentConcurrency();
       if (kind === "codex-cli" || kind === "claude-code") {
         const executable = this.root?.querySelector<HTMLInputElement>(
           '[data-pref="agentExecutable"]',
@@ -751,11 +779,13 @@ export class PreferencesController {
       const custom = select.value === "__custom__";
       input.hidden = !custom;
       if (!custom) input.value = select.value;
+      this.syncAgentConcurrency();
     };
     select.addEventListener("change", syncFromSelect);
     input.addEventListener("input", () => {
       if (select.value !== "__custom__") select.value = "__custom__";
     });
+    input.addEventListener("change", () => this.syncAgentConcurrency());
     this.root
       .querySelector("#zrdb-agent-model-refresh")
       ?.addEventListener("click", () => {
@@ -791,6 +821,7 @@ export class PreferencesController {
     const providerID = this.agentProviderID;
     const requestId = ++this.agentModelRequestId;
     if (resetModel) input.value = "";
+    this.syncAgentConcurrency();
     const presets = [...getAgentModelPresets(kind)];
     let options = presets;
     let codexHint = "";
@@ -873,6 +904,7 @@ export class PreferencesController {
         // the relay provider rejects and the picker shows the real id.
         codexHint = `本机实际模型 ID 是 ${resolved}，已自动改用并保存。`;
         input.value = resolved;
+        this.syncAgentConcurrency();
         setPref("agentModel", resolved);
       } else if (chosen && !resolved) {
         codexHint = "该模型不在本机 Codex 可用列表中，运行可能失败。";
@@ -1034,6 +1066,14 @@ export class PreferencesController {
 
   private profileFromControls(): AgentProfile {
     if (!this.root) throw new Error("设置页面尚未加载");
+    const concurrencyControl = this.root.querySelector<HTMLInputElement>(
+      "#zrdb-agent-concurrency",
+    );
+    if (concurrencyControl) {
+      const count = parseAgentConcurrency(concurrencyControl.value);
+      this.agentModelConcurrency[this.agentConcurrencyKey] = count;
+      this.syncAgentConcurrency();
+    }
     return parseAgentProfile({
       kind: inputValue(this.root, "agentKind"),
       executable: inputValue(this.root, "agentExecutable"),
@@ -1043,6 +1083,7 @@ export class PreferencesController {
       model: inputValue(this.root, "agentModel"),
       reasoningEffort: inputValue(this.root, "agentReasoningEffort"),
       apiProtocol: inputValue(this.root, "agentProtocol"),
+      modelConcurrency: this.agentModelConcurrency,
       timeoutMs: inputValue(this.root, "agentTimeoutMs"),
     });
   }

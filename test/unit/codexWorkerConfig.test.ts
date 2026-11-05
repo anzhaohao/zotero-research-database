@@ -26,6 +26,8 @@ describe("isolated Codex worker configuration", function () {
         name: "Router",
         base_url: "http://127.0.0.1:1234/v1",
         env_key: "CUSTOM_KEY",
+        request_max_retries: 0,
+        stream_max_retries: 0,
       },
     });
     expect(result).not.to.have.any.keys(
@@ -84,5 +86,24 @@ describe("isolated Codex worker configuration", function () {
       .to.throw("config.toml 格式无效")
       .with.property("message")
       .that.does.not.include("private-auth-value");
+  });
+
+  it("bounds retries in the disposable configuration while preserving source routing", function () {
+    const source = [
+      'model_provider = "router"',
+      "[model_providers.router]",
+      'name = "Router"',
+      'base_url = "http://127.0.0.1:1234/v1"',
+      "request_max_retries = 4",
+      "stream_max_retries = 5",
+    ].join("\n");
+    const original = parse(source);
+    const result = parse(buildCodexWorkerConfig(source, "/original"));
+    expect((result.model_providers as any).router).to.include({
+      request_max_retries: 0,
+      stream_max_retries: 0,
+      base_url: "http://127.0.0.1:1234/v1",
+    });
+    expect(parse(source)).to.deep.equal(original);
   });
 });

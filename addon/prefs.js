@@ -26,6 +26,7 @@ pref("agentArgs", "");
 pref("agentEndpoint", "http://127.0.0.1:11434");
 pref("agentApiKey", "");
 pref("agentModel", "");
+pref("agentModelConcurrency", "{}");
 pref("agentReasoningEffort", "");
 pref("agentProtocol", "chat-completions");
 pref("agentTimeoutMs", 900000);

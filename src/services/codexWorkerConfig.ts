@@ -43,6 +43,22 @@ export function buildCodexWorkerConfig(
     for (const key of ROUTING_KEYS) {
       if (Object.hasOwn(source, key)) output[key] = source[key];
     }
+    if (output.model_providers && typeof output.model_providers === "object") {
+      output.model_providers = Object.fromEntries(
+        Object.entries(output.model_providers).map(([name, provider]) => {
+          if (
+            !provider ||
+            typeof provider !== "object" ||
+            Array.isArray(provider)
+          )
+            throw new Error("Codex 供应商配置格式无效，未启动文献任务");
+          return [
+            name,
+            { ...provider, request_max_retries: 0, stream_max_retries: 0 },
+          ];
+        }),
+      );
+    }
     if (typeof output.model_catalog_json === "string") {
       output.model_catalog_json = resolvePath(
         sourceHome,

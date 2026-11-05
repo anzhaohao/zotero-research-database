@@ -327,6 +327,22 @@
       <html:p id="zrdb-agent-model-help" class="zrdb-pref-help"
         >从列表直接选择；只有使用新模型或自建模型时才选择“自定义模型”。</html:p
       >
+      <html:label
+        >当前模型并发数
+        <html:input
+          type="number"
+          id="zrdb-agent-concurrency"
+          aria-label="当前模型并发数"
+          min="1"
+          max="8"
+          step="1"
+          value="1"
+          required="required"
+        />
+      </html:label>
+      <html:p class="zrdb-pref-help"
+        >同时生成的研究字段数量（1—8）。按供应商和模型分别保存，切换模型会恢复对应值。每个字段都会发送完整论文；并发越高，瞬时请求量越高，可能触发限流。</html:p
+      >
       <html:div class="zrdb-pref-inline-actions">
         <html:button
           type="button"

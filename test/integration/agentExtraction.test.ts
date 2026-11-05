@@ -1,6 +1,6 @@
 import { assert } from "chai";
 import {
-  ConfiguredAgentBridge,
+  createAgentBridge,
   type AgentProfile,
 } from "../../src/services/externalAgent";
 import {
@@ -14,7 +14,7 @@ import {
   getLocalPayloadSnapshot,
 } from "../../src/storage/localData";
 
-describe("live API paper extraction in Zotero", function () {
+describe("live saved-provider paper extraction in Zotero", function () {
   it("fills a real complete paper, saves incremental fields and reloads verified results", async function () {
     this.timeout(360_000);
     const fixturePath = String(
@@ -38,16 +38,25 @@ describe("live API paper extraction in Zotero", function () {
         }
       }
     }
-    const profile = JSON.parse(
+    const savedProfile = JSON.parse(
       String(
         prefs.get("extensions.zotero.zoteroResearchDatabase.agentProviders"),
       ),
     ).find((entry: any) => entry.name === fixture.providerName) as AgentProfile;
-    assert.equal(profile.kind, "openai-compatible");
+    assert.exists(savedProfile, "Saved provider must exist");
+    const profile = { ...savedProfile, ...fixture.profileOverrides };
+    assert.include(
+      ["openai-compatible", "codex-cli", "claude-code"],
+      profile.kind,
+    );
     const workspace = parseLocalPayload(
       JSON.parse(await IOUtils.readUTF8(fixture.databasePath)),
     ).workspace!;
-    const fields = workspace.fields.filter((field) => !field.archived);
+    const fields = workspace.fields.filter(
+      (field) =>
+        !field.archived &&
+        (!fixture.fieldIDs || fixture.fieldIDs.includes(field.id)),
+    );
     workspace.fields = fields;
     const paper = new Zotero.Item("journalArticle");
     paper.libraryID = Zotero.Libraries.userLibraryID;
@@ -78,7 +87,7 @@ describe("live API paper extraction in Zotero", function () {
       assert.isAbove(resolved.text.length, 30_000);
       const service = new ExternalAgentExtractionService(
         repository,
-        () => new ConfiguredAgentBridge({ ...profile, timeoutMs: 120_000 }),
+        () => createAgentBridge({ ...profile, timeoutMs: 120_000 }),
         (item) => resolveSourceText(item, repository),
       );
       await service.run([paper], workspace, (event) => {
@@ -123,7 +132,8 @@ describe("live API paper extraction in Zotero", function () {
         assert.isNotEmpty(String(values[field.id] || ""), field.name);
         assert.deepEqual(diskRecord?.fields[field.id]?.value, values[field.id]);
       }
-      assert.match(String(values["results-evidence"]), /220[\s\S]{0,30}470/);
+      if (fields.some((field) => field.id === "results-evidence"))
+        assert.match(String(values["results-evidence"]), /220[\s\S]{0,30}470/);
     } finally {
       await paper.eraseTx();
     }

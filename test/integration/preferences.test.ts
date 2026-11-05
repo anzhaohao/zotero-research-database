@@ -368,6 +368,32 @@ describe("preferences persistence in the real Zotero settings window", function 
           "gpt-5.6-sol",
           "selecting a model updates the persisted control",
         );
+        const concurrency = win!.document.getElementById(
+          "zrdb-agent-concurrency",
+        ) as HTMLInputElement;
+        assert.exists(concurrency, "model concurrency is editable");
+        concurrency.value = "4";
+        const other = Array.from(modelSelect.options).find(
+          (option) =>
+            option.value &&
+            option.value !== "__custom__" &&
+            option.value !== "gpt-5.6-sol",
+        )!;
+        modelSelect.value = other.value;
+        modelSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+        assert.equal(
+          concurrency.value,
+          "1",
+          "a new CLI model defaults to one field",
+        );
+        concurrency.value = "2";
+        modelSelect.value = "gpt-5.6-sol";
+        modelSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+        assert.equal(
+          concurrency.value,
+          "4",
+          "switching back restores the model concurrency",
+        );
       }
       stage = "switch assistants and reload their model choices";
       agentKind.value = "claude-code";
@@ -407,6 +433,11 @@ describe("preferences persistence in the real Zotero settings window", function 
       setValue("agentModel", String(expected.agentModel));
       setValue("agentReasoningEffort", String(expected.agentReasoningEffort));
       setValue("agentProtocol", String(expected.agentProtocol));
+      (
+        win!.document.getElementById(
+          "zrdb-agent-concurrency",
+        ) as HTMLInputElement
+      ).value = "3";
       await open("mineru");
       stage = "verify MinerU token control";
       assert.strictEqual(
@@ -461,6 +492,18 @@ describe("preferences persistence in the real Zotero settings window", function 
         String(Zotero.Prefs.get(PREFIX + "agentProviders", true) || "[]"),
       ) as Array<Record<string, unknown>>;
       assert.lengthOf(savedProviders, 1, "saving creates the provider list");
+      assert.equal(
+        (savedProviders[0].modelConcurrency as Record<string, number>)[
+          JSON.stringify(["codex-cli", "gpt-5.6-sol"])
+        ],
+        4,
+      );
+      assert.equal(
+        (savedProviders[0].modelConcurrency as Record<string, number>)[
+          JSON.stringify(["claude-code", expected.agentModel])
+        ],
+        3,
+      );
       assert.include(savedProviders[0], {
         id: "default",
         model: expected.agentModel,
@@ -501,6 +544,15 @@ describe("preferences persistence in the real Zotero settings window", function 
 
       stage = "manage multiple providers in the real settings window";
       await open("agent");
+      assert.equal(
+        (
+          win!.document.getElementById(
+            "zrdb-agent-concurrency",
+          ) as HTMLInputElement
+        ).value,
+        "3",
+        "model concurrency survives closing and reopening settings",
+      );
       const providerSelect = win!.document.getElementById(
         "zrdb-agent-provider-select",
       ) as HTMLSelectElement;
