@@ -44,6 +44,36 @@ describe("research field display formatting", function () {
     expect(researchMarkdownSource(source, "结果与证据")).to.equal(source);
   });
 
+  it("preserves figure citations with enumeration punctuation", function () {
+    for (const citation of [
+      "（Fig. 2、Fig. 3）",
+      "(Fig. 2. Fig. 3)",
+      "图2、图3",
+      "Fig. 12、Fig. 13",
+      "Eq. 2) 和 Eq. 3)",
+    ]) {
+      const source = "**调参检验：** 比较光谱和脉宽" + citation + "。";
+      expect(researchMarkdownSource(source, "研究实施")).to.equal(source);
+    }
+  });
+
+  it("preserves prose numbering and technical dashes instead of inventing lists", function () {
+    const source =
+      "**条件：** 选择 2、4、6 片薄片，使用 Fig. 2、Fig. 3 验证；误差取 x - y，范围 2 - 4 mm。";
+    expect(researchMarkdownSource(source, "研究实施")).to.equal(source);
+  });
+
+  it("preserves figure citations inside a genuine legacy numbered list", function () {
+    expect(
+      researchMarkdownSource(
+        "1.观测：比较（Fig. 2、Fig. 3）。 2.测量：用（Fig. 4）验证。",
+        "研究实施",
+      ),
+    ).to.equal(
+      "1. **观测：** 比较（Fig. 2、Fig. 3）。\n2. **测量：** 用（Fig. 4）验证。",
+    );
+  });
+
   it("separates compact Markdown labels for display without changing the source", function () {
     const source = "**形成证据：**Fig. 2展示展宽光谱。";
     expect(researchMarkdownSource(source, "结果与证据")).to.equal(

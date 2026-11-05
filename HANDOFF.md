@@ -741,3 +741,24 @@ The 0.3.33 artifact implemented formula rendering and settings/menu consolidatio
 - 单元 313 项、主项目与测试 tsc、lint、真实设置页均通过；常规隔离宿主 29 passed / 8 pending，付费全文测试另行显式执行两次通过。详见 docs/MODEL_CONCURRENCY_CODEX_VALIDATION_2026-11-05.md。
 - 本轮 XPI 仍统一交付 release/zotero-research-database.xpi，旧不同内容包归档 release/archive/。正式 profile 不自动覆盖安装。用户已授权提交并 push；提交范围不包含忽略目录中的论文输出、凭据或临时 worker 配置。
 - 最终生产包 0.3.41：1,028,732 字节，47 个 ZIP 条目 CRC 完整，已确认包含并发控件；SHA-256 为 F10A35E05125C6BAC37E6FFD32510AE42C2D82F57E80FF9774958050426324D6。上一版 0.3.40 的 5DB559... 包已由构建脚本归档到 release/archive/。
+
+## 2026-11-05 图号顿号被误识别为列表的显示修复（0.3.42）
+
+- 用户截图中原始保存值为“（Fig. 2、Fig. 3）”，没有换行；旧 researchMarkdownSource 的全局列表猜测把空格后的“2、”当成编号，插入换行后又变成“2.”。此前只有“Fig. 2”的测试未覆盖图号后带顿号的场景。
+- 仅调整显示层：普通段落不再按数字、顿号、点或行内短横线自动拆行；紧凑旧列表仅在原本已编号的行中、遇到另一个带短标签及冒号的条目时恢复分行。保留原有段落、合法 Markdown 列表和旧编号标签列表；不写回原始研究数据。
+- 修复前新增四项回归均失败，修复后 317 项单元测试通过；主项目和测试 TypeScript、lint、diff 检查通过。隔离 Zotero 10.0.7 渲染三项通过，包含 220/300/380 像素列宽下的连续图号引用、没有合成 br/列表节点、图号内部不折行。
+- 交付版本 0.3.42，release/zotero-research-database.xpi；不同内容旧包仍归档 release/archive/。安装后已有正常原文直接使用新显示规则，不需要重新调用 AI。正式 profile 未自动覆盖安装；用户后续已授权提交并 push。
+- 包大小 1,028,769 字节，47 个 ZIP 条目校验通过；SHA-256 为 AF0FED19EC459E7ADEB33E7BC38A343EDE2B4C9656CCFD1320E990E8F541BEA5。上一版 0.3.41 已归档到 release/archive/。
+- Git 交接：当前分支 codex/shared-mineru-store，本节对应修复提交的父提交为 40f610e；具体提交号见 git log。已执行 git log --oneline --graph --decorate --all -n 5 核对线性历史；下图只展示最近三次提交，不推断分支创建来源。
+
+```mermaid
+---
+config:
+  gitGraph:
+    mainBranchName: codex/shared-mineru-store
+---
+gitGraph
+   commit id: "22035a4 AI填充与迁移"
+   commit id: "40f610e 模型并发"
+   commit id: "0.3.42 图号换行修复"
+```

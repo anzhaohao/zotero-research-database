@@ -32,17 +32,19 @@ function displayLines(value: unknown, fieldName: string): string[] {
       // Malformed JSON remains visible as ordinary text.
     }
   }
-  return source
-    .replace(
-      /(?<=[\p{Script=Han}A-Za-z。；;!?！？])\s*(?=[2-9](?:[)、]|\.(?!\d))\s*)/gu,
-      "\n",
-    )
-    .replace(
-      /[ \t]+(?=(?:[-*•·▪◦]\s+|\d{1,3}(?:[)、]|\.(?!\d))\s*|[（(][一二三四五六七八九十\d]+[）)]\s*))/g,
-      "\n",
-    )
-    .split(/\n/)
-    .map((line) => line.trim());
+  return source.split(/\n/).flatMap((line) => {
+    const text = stripRepeatedFieldName(line.trim(), fieldName);
+    // Only recover compact legacy lists in an already numbered line, and only
+    // at another labelled item. Ordinary prose such as "Fig. 2、Fig. 3" or
+    // "x - y" must never acquire synthetic line breaks or list punctuation.
+    if (!/^\d{1,3}(?:[)、]|\.(?!\d))[ \t]*/.test(text)) return [text];
+    return text
+      .replace(
+        /(?:[ \t]+|(?<=[。；;!?！？]))(?=\d{1,3}(?:[)、]|\.(?!\d))[ \t]*(?:\*\*)?[^：:\r\n。；;!?！？（）()]{1,14}[：:])/g,
+        "\n",
+      )
+      .split("\n");
+  });
 }
 
 function objectLines(

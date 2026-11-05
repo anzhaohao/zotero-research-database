@@ -117,4 +117,47 @@ describe("research Markdown layout in the Zotero host", function () {
     assert.include(container.textContent, "8.0 fs");
     assert.include(container.textContent, "Fig. 2");
   });
+
+  it("preserves enumerated figure citations across narrow column widths", async function () {
+    root.render(
+      React.createElement(ResearchTextValue, {
+        value:
+          "**展宽装置：** 使用 800 nm、50 fs 脉冲和 200 μm 薄片。\n\n" +
+          "**调参检验：** 比较光谱、远场光斑和脉宽，判断形成条件（Fig. 2、Fig. 3）。\n\n" +
+          "**压缩测量：** 补偿色散后重建脉宽与相位（Fig. 4）。",
+        fieldName: "研究实施",
+      }),
+    );
+    await eventually(
+      () => container.querySelectorAll(".zrdb-research-block").length === 3,
+      "citation fixture did not render as three paragraphs",
+    );
+    await win.document.fonts.ready;
+    for (const width of [220, 300, 380]) {
+      container.style.width = width + "px";
+      assert.equal(
+        container.querySelectorAll("br, ol, li").length,
+        0,
+        "no synthetic breaks or list markers at width " + width,
+      );
+      assert.include(container.textContent, "（Fig. 2、Fig. 3）。");
+      const references = Array.from(
+        container.querySelectorAll<HTMLElement>(".zrdb-research-nowrap"),
+      ).filter((element) => element.textContent?.startsWith("Fig."));
+      assert.deepEqual(
+        references.map((element) => element.textContent),
+        ["Fig. 2", "Fig. 3", "Fig. 4"],
+      );
+      for (const reference of references) {
+        const range = win.document.createRange();
+        range.selectNodeContents(reference);
+        assert.equal(win.getComputedStyle(reference).whiteSpace, "nowrap");
+        assert.equal(
+          range.getClientRects().length,
+          1,
+          "figure reference stays together at width " + width,
+        );
+      }
+    }
+  });
 });

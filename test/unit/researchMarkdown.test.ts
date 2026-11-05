@@ -17,6 +17,20 @@ describe("restricted research Markdown rendering", function () {
     expect(html).to.include("8.0 fs");
   });
 
+  it("does not insert breaks or list markers into comma-separated figure citations", function () {
+    const html = render(
+      "**调参检验：** 比较光谱与脉宽（Fig. 2、Fig. 3）。",
+      "研究实施",
+    );
+    expect(html).not.to.include("<ol");
+    expect(html).not.to.include("<br");
+    expect(html).to.include('class="zrdb-research-nowrap">Fig. 2</span>');
+    expect(html).to.include('class="zrdb-research-nowrap">Fig. 3</span>');
+    expect(html.replace(/<[^>]+>/g, "")).to.equal(
+      "调参检验： 比较光谱与脉宽（Fig. 2、Fig. 3）。",
+    );
+  });
+
   it("renders emphasis, single line breaks, and semantic lists", function () {
     const html = render("**标签：** 第一行\n第二行\n\n1. 一步\n2. 二步");
     expect(html).to.include("<strong>");
