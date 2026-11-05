@@ -14,6 +14,12 @@ import {
 } from "../core/viewLayout";
 import { nativeColumns } from "./features/table/tableColumns";
 import {
+  normalizeTableTypography,
+  TABLE_TYPOGRAPHY_DEFAULTS,
+  TABLE_TYPOGRAPHY_KEYS,
+  tableTypographyStyle,
+} from "../core/tableTypography";
+import {
   createAgentBridge,
   listOpenAICompatibleModels,
   listOllamaModels,
@@ -74,6 +80,7 @@ const prefKeys = [
   "density",
   "cornerStrength",
   "shadowStrength",
+  ...TABLE_TYPOGRAPHY_KEYS,
   "defaultExportScope",
   "viewTogglePosition",
   "artifactStorageRoot",
@@ -157,7 +164,9 @@ export class PreferencesController {
     this.root = root;
     root.dataset.zrdbBound = "1";
     this.bindTabBar();
+    this.populateFontOptions();
     this.loadLocalControls();
+    this.bindTypographyControls();
     this.loadAgentProviderControls();
     this.bindLocalControls();
     this.bindAgentProviderControls();
@@ -232,6 +241,72 @@ export class PreferencesController {
     }
   }
 
+  private populateFontOptions(): void {
+    const select = this.root?.querySelector<HTMLSelectElement>(
+      '[data-pref="tableFontFamily"]',
+    );
+    if (!select) return;
+    let fonts: string[];
+    try {
+      fonts = Cc["@mozilla.org/gfx/fontenumerator;1"]
+        .createInstance(Ci.nsIFontEnumerator)
+        .EnumerateAllFonts();
+    } catch {
+      fonts = ["Arial", "Microsoft YaHei", "Noto Sans CJK SC", "SimSun"];
+    }
+    const current = String(getPref("tableFontFamily") || "");
+    for (const font of [...new Set([...fonts, current])]
+      .filter(Boolean)
+      .sort()) {
+      const option = this.win.document.createElementNS(
+        "http://www.w3.org/1999/xhtml",
+        "option",
+      ) as HTMLOptionElement;
+      option.value = font;
+      option.textContent = font;
+      select.append(option);
+    }
+  }
+
+  private typographyFromControls() {
+    return normalizeTableTypography(
+      Object.fromEntries(
+        TABLE_TYPOGRAPHY_KEYS.map((key) => [key, inputValue(this.root!, key)]),
+      ),
+    );
+  }
+
+  private bindTypographyControls(): void {
+    if (!this.root) return;
+    const preview = this.root.querySelector<HTMLElement>(
+      "#zrdb-typography-preview",
+    );
+    const update = () => {
+      if (!preview) return;
+      for (const [key, value] of Object.entries(
+        tableTypographyStyle(this.typographyFromControls()),
+      ))
+        preview.style.setProperty(key, value);
+    };
+    for (const key of TABLE_TYPOGRAPHY_KEYS) {
+      const control = this.root.querySelector(`[data-pref="${key}"]`);
+      control?.addEventListener("input", update);
+      control?.addEventListener("change", update);
+    }
+    this.root
+      .querySelector("#zrdb-typography-reset")
+      ?.addEventListener("click", () => {
+        for (const key of TABLE_TYPOGRAPHY_KEYS) {
+          const control = this.root!.querySelector<
+            HTMLInputElement | HTMLSelectElement
+          >(`[data-pref="${key}"]`);
+          if (control) control.value = String(TABLE_TYPOGRAPHY_DEFAULTS[key]);
+        }
+        update();
+      });
+    update();
+  }
+
   private bindLocalControls(): void {
     this.root
       ?.querySelector("#zrdb-pref-save")
@@ -303,6 +378,7 @@ export class PreferencesController {
           String(getPref("artifactStorageRoot") || "").trim() ||
         requestedSharedRoot !==
           String(getPref("mineruSharedStoreDirectory") || "").trim();
+      const typography = this.typographyFromControls();
       for (const key of prefKeys) {
         if (
           [
@@ -312,8 +388,9 @@ export class PreferencesController {
           ].includes(key)
         )
           continue;
-        const raw =
-          key === "mineruOfficialEndpoint"
+        const raw = TABLE_TYPOGRAPHY_KEYS.includes(key as never)
+          ? typography[key as keyof typeof typography]
+          : key === "mineruOfficialEndpoint"
             ? mineruProfile.officialEndpoint
             : inputValue(this.root, key);
         const value = [
@@ -328,6 +405,12 @@ export class PreferencesController {
         setPref(key, value as never);
       }
       await flushPortableSettings();
+      for (const key of TABLE_TYPOGRAPHY_KEYS) {
+        const control = this.root.querySelector<
+          HTMLInputElement | HTMLSelectElement
+        >(`[data-pref="${key}"]`);
+        if (control) control.value = String(typography[key]);
+      }
       scheduleDirectoryMigration({
         dataRoot: requestedRoot,
         artifactStorageRoot: requestedArtifactRoot,

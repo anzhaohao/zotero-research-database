@@ -22,6 +22,9 @@ declare namespace _ZoteroTypes {
       "density": string;
       "cornerStrength": string;
       "shadowStrength": string;
+      "tableFontFamily": string;
+      "tableFontSize": number;
+      "tableHeadingFontSize": number;
       "defaultExportScope": string;
       "zoteroFigureEnabled": boolean;
       "zoteroFigureShowFigures": boolean;

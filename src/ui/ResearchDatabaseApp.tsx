@@ -46,6 +46,12 @@ import {
 } from "../services/externalAgent";
 import { openZoteroFigureParserUI } from "../services/zoteroFigure";
 import { getPref } from "../utils/prefs";
+import { config } from "../../package.json";
+import {
+  normalizeTableTypography,
+  TABLE_TYPOGRAPHY_KEYS,
+  tableTypographyStyle,
+} from "../core/tableTypography";
 import { type EditingCell } from "./features/table/tableTypes";
 import {
   prefersReducedMotion,
@@ -126,6 +132,20 @@ export function ResearchDatabaseApp(props: Props) {
     onWorkspaceChanged: setWorkspace,
   });
   const [, setItemRevision] = useState(0);
+  const [, setTypographyRevision] = useState(0);
+  useEffect(() => {
+    const observers = TABLE_TYPOGRAPHY_KEYS.map((key) =>
+      Zotero.Prefs.registerObserver(
+        `${config.prefsPrefix}.${key}`,
+        () => setTypographyRevision((revision) => revision + 1),
+        true,
+      ),
+    );
+    return () => {
+      for (const observer of observers)
+        Zotero.Prefs.unregisterObserver(observer);
+    };
+  }, []);
 
   useGSAP(
     () => {
@@ -749,6 +769,15 @@ export function ResearchDatabaseApp(props: Props) {
       data-corners={cornerStrength}
       data-shadow={shadowStrength}
       data-theme="zotero"
+      style={
+        tableTypographyStyle(
+          normalizeTableTypography({
+            tableFontFamily: getPref("tableFontFamily"),
+            tableFontSize: getPref("tableFontSize"),
+            tableHeadingFontSize: getPref("tableHeadingFontSize"),
+          }),
+        ) as React.CSSProperties
+      }
       ref={appRef}
     >
       <header className="zrdb-actionbar">

@@ -3180,11 +3180,12 @@ button.zrdb-view-toggle:active {
   min-width: 0;
   max-height: 100%;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.74em;
   padding: 1px 5px 1px 0;
   overflow: auto;
   color: var(--zrdb-ink);
-  font-size: 13.5px;
+  font-family: var(--zrdb-table-font-family, system-ui, sans-serif);
+  font-size: var(--zrdb-table-font-size, 15px);
   line-height: 1.68;
   scrollbar-width: thin;
   text-rendering: optimizeLegibility;
@@ -3197,14 +3198,14 @@ button.zrdb-view-toggle:active {
 }
 
 .zrdb-research-block + .zrdb-research-block {
-  padding-top: 1px;
+  padding-top: 0;
 }
 
 .zrdb-research-block.is-heading {
   padding-bottom: 3px;
   border-bottom: 1px solid var(--zrdb-line);
   color: var(--zrdb-muted);
-  font-size: 12px;
+  font-size: var(--zrdb-table-heading-font-size, 16px);
   font-weight: 650;
   letter-spacing: 0.02em;
 }
@@ -3243,6 +3244,12 @@ button.zrdb-view-toggle:active {
 }
 
 .zrdb-research-block strong {
+  font-size: inherit;
+  font-weight: 700;
+  line-height: inherit;
+}
+
+.zrdb-research-block strong.zrdb-research-label {
   display: inline;
   margin-right: 4px;
   border-radius: 3px;
@@ -3250,10 +3257,46 @@ button.zrdb-view-toggle:active {
   color: var(--zrdb-ink);
   background: var(--zrdb-soft);
   box-decoration-break: clone;
-  font-size: 12px;
+  font-size: var(--zrdb-table-heading-font-size, 16px);
   font-weight: 650;
-  line-height: 1.55;
+  line-height: inherit;
   white-space: nowrap;
+}
+
+.zrdb-table-shell {
+  font-family: var(--zrdb-table-font-family, system-ui, sans-serif);
+}
+
+.zrdb-table-cell:not(.zrdb-header-cell),
+.zrdb-paper-title > span,
+.zrdb-basic-row span {
+  font-size: var(--zrdb-table-font-size, 15px);
+}
+
+.zrdb-paper-title-heading strong {
+  font-size: calc(var(--zrdb-table-font-size, 15px) + 2px);
+}
+
+.zrdb-basic-row {
+  grid-template-columns: 3.3em minmax(0, 1fr);
+}
+
+.zrdb-basic-row b {
+  font-size: 0.87em;
+}
+
+#zrdb-typography-preview {
+  max-width: 460px;
+  padding: 14px;
+  border: 1px solid
+    var(--zrdb-line, color-mix(in srgb, CanvasText 18%, transparent));
+  border-radius: 6px;
+  --zrdb-ink: CanvasText;
+  --zrdb-soft: color-mix(in srgb, CanvasText 7%, Canvas);
+}
+
+#zrdb-typography-preview .zrdb-research-text {
+  overflow: visible;
 }
 
 .zrdb-research-nowrap {

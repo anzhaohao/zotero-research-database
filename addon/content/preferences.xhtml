@@ -120,6 +120,50 @@
     <html:div class="zrdb-pref-section">
       <html:h3>外观</html:h3>
       <html:label
+        >表格字体
+        <html:select data-pref="tableFontFamily">
+          <html:option value="">跟随系统</html:option>
+        </html:select>
+      </html:label>
+      <html:label
+        >正文字号（px）
+        <html:input
+          type="number"
+          min="10"
+          max="28"
+          step="1"
+          data-pref="tableFontSize"
+        />
+      </html:label>
+      <html:label
+        >段首标题字号（px）
+        <html:input
+          type="number"
+          min="10"
+          max="36"
+          step="1"
+          data-pref="tableHeadingFontSize"
+        />
+      </html:label>
+      <html:button type="button" id="zrdb-typography-reset"
+        >恢复默认字体与字号</html:button
+      >
+      <html:div id="zrdb-typography-preview" aria-label="字体与字号实时预览">
+        <html:div class="zrdb-research-text">
+          <html:p class="zrdb-research-block"
+            ><html:strong class="zrdb-research-label">机制链条：</html:strong
+            >调节实验参数，维持稳定传播；<html:strong>自相位调制</html:strong>展宽光谱后，再补偿色散获得少周期脉冲。</html:p
+          >
+          <html:p class="zrdb-research-block"
+            ><html:strong class="zrdb-research-label">证据边界：</html:strong
+            >区分论文直接证据与作者推断，保留适用条件。</html:p
+          >
+        </html:div>
+      </html:div>
+      <html:p
+        >预览随调整即时更新，保存后应用到表格。其他电脑缺少所选字体时自动使用系统字体。</html:p
+      >
+      <html:label
         >界面密度
         <html:select data-pref="density"
           ><html:option value="compact">紧凑</html:option

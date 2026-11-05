@@ -160,4 +160,48 @@ describe("research Markdown layout in the Zotero host", function () {
       }
     }
   });
+
+  it("separates paragraph headings from inline emphasis and scales typography", async function () {
+    root.render(
+      React.createElement(ResearchTextValue, {
+        value:
+          "**机制链条：** 调节参数；**自相位调制**展宽光谱。\n\n**证据边界：** 保留证据边界。",
+        fieldName: "研究逻辑",
+      }),
+    );
+    await eventually(
+      () => container.querySelectorAll(".zrdb-research-label").length === 2,
+      "paragraph labels did not render",
+    );
+    const body = container.querySelector<HTMLElement>(".zrdb-research-text")!;
+    const label = body.querySelector<HTMLElement>(".zrdb-research-label")!;
+    const emphasis = body.querySelector<HTMLElement>(
+      "strong:not(.zrdb-research-label)",
+    )!;
+    assert.equal(win.getComputedStyle(body).fontSize, "15px");
+    assert.equal(win.getComputedStyle(label).fontSize, "16px");
+    assert.equal(win.getComputedStyle(emphasis).fontSize, "15px");
+    assert.equal(
+      win.getComputedStyle(emphasis).backgroundColor,
+      "rgba(0, 0, 0, 0)",
+    );
+    for (const [bodySize, headingSize] of [
+      [18, 20],
+      [28, 36],
+    ]) {
+      container.style.setProperty("--zrdb-table-font-size", bodySize + "px");
+      container.style.setProperty(
+        "--zrdb-table-heading-font-size",
+        headingSize + "px",
+      );
+      assert.equal(win.getComputedStyle(body).fontSize, bodySize + "px");
+      assert.equal(win.getComputedStyle(label).fontSize, headingSize + "px");
+      assert.equal(win.getComputedStyle(emphasis).fontSize, bodySize + "px");
+      assert.closeTo(
+        parseFloat(win.getComputedStyle(body).gap),
+        bodySize * 0.74,
+        0.05,
+      );
+    }
+  });
 });

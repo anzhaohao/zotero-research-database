@@ -91,6 +91,26 @@ describe("portable settings persistence", function () {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("persists typography through a settings scope restart", async function () {
+    await seedSettings({});
+    await initializePortableSettings();
+    setPref("tableFontFamily", "Microsoft YaHei");
+    setPref("tableFontSize", 18);
+    setPref("tableHeadingFontSize", 20);
+    await flushPortableSettings();
+    resetPortableSettingsScope();
+    prefs.set(prefKey("tableFontSize"), 12);
+    await initializePortableSettings();
+    expect(getPref("tableFontFamily")).to.equal("Microsoft YaHei");
+    expect(getPref("tableFontSize")).to.equal(18);
+    expect(getPref("tableHeadingFontSize")).to.equal(20);
+    expect((await readSettings()).values).to.include({
+      tableFontFamily: "Microsoft YaHei",
+      tableFontSize: 18,
+      tableHeadingFontSize: 20,
+    });
+  });
+
   it("waits for disk and never reloads old values during a repeated initialization", async function () {
     await seedSettings({ agentModel: "old", motionEnabled: true });
     await initializePortableSettings();

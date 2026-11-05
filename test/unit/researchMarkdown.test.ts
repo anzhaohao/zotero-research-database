@@ -33,7 +33,7 @@ describe("restricted research Markdown rendering", function () {
 
   it("renders emphasis, single line breaks, and semantic lists", function () {
     const html = render("**标签：** 第一行\n第二行\n\n1. 一步\n2. 二步");
-    expect(html).to.include("<strong>");
+    expect(html).to.include('<strong class="zrdb-research-label">');
     expect(html).to.include("标签：");
     expect(html).to.include("<br/>");
     expect(html).to.include("<ol");
@@ -42,7 +42,7 @@ describe("restricted research Markdown rendering", function () {
 
   it("renders compact Chinese labels without exposing Markdown markers", function () {
     const html = render("**形成证据：**Fig. 2展示展宽光谱。", "结果与证据");
-    expect(html).to.include("<strong>");
+    expect(html).to.include('<strong class="zrdb-research-label">');
     expect(html).to.include("形成证据：");
     expect(html).not.to.include("**");
   });

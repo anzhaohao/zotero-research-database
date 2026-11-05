@@ -186,6 +186,7 @@ describe("preferences persistence in the real Zotero settings window", function 
       Zotero[config.addonInstance] as any
     ).data.controllers.get(Zotero.getMainWindow());
     const repository = controller.repository as ResearchRepository;
+    const originalMode = controller.mode;
     let originalWorkspace: WorkspaceState | undefined;
     let workspaceTouched = false;
     let historyItem: Zotero.Item | undefined;
@@ -230,6 +231,9 @@ describe("preferences persistence in the real Zotero settings window", function 
       figureImageQuality: "standard",
       motionEnabled: true,
       defaultRowHeight: 216,
+      tableFontFamily: "Arial",
+      tableFontSize: 18,
+      tableHeadingFontSize: 20,
       agentApiKey: "ZRDB preferences local API key",
       agentModel: "ZRDB preferences 测试 model",
       agentReasoningEffort: "high",
@@ -453,6 +457,49 @@ describe("preferences persistence in the real Zotero settings window", function 
         const input = control(win!, key) as HTMLInputElement;
         if (input.checked !== expected[key]) await clickVisible(win!, input);
       }
+      stage = "preview and reset typography in appearance settings";
+      controller.setMode("table");
+      await eventually(
+        () =>
+          Boolean(Zotero.getMainWindow().document.querySelector(".zrdb-app")),
+        () => "table was not mounted for typography validation",
+      );
+      await open("appearance");
+      const fontPicker = control(win!, "tableFontFamily") as HTMLSelectElement;
+      assert.isAbove(fontPicker.options.length, 1, "local fonts are available");
+      for (const key of [
+        "tableFontFamily",
+        "tableFontSize",
+        "tableHeadingFontSize",
+      ])
+        setValue(key, String(expected[key]));
+      const preview = win!.document.querySelector<HTMLElement>(
+        "#zrdb-typography-preview .zrdb-research-text",
+      )!;
+      assert.equal(win!.getComputedStyle(preview).fontSize, "18px");
+      assert.equal(
+        win!.getComputedStyle(preview.querySelector(".zrdb-research-label")!)
+          .fontSize,
+        "20px",
+      );
+      assert.equal(
+        win!.getComputedStyle(
+          preview.querySelector("strong:not(.zrdb-research-label)")!,
+        ).fontSize,
+        "18px",
+      );
+      await clickVisible(
+        win!,
+        win!.document.getElementById("zrdb-typography-reset")!,
+      );
+      assert.equal(control(win!, "tableFontSize").value, "15");
+      assert.equal(control(win!, "tableHeadingFontSize").value, "16");
+      for (const key of [
+        "tableFontFamily",
+        "tableFontSize",
+        "tableHeadingFontSize",
+      ])
+        setValue(key, String(expected[key]));
       stage = "save local settings via real button";
       const save = win!.document.getElementById(
         "zrdb-pref-save",
@@ -469,6 +516,25 @@ describe("preferences persistence in the real Zotero settings window", function 
         () => "save did not succeed; " + windowDiagnostics(win),
       );
       stage = "read actual Zotero preference values and native types";
+      await eventually(
+        () =>
+          Zotero.getMainWindow()
+            .document.querySelector<HTMLElement>(".zrdb-app")
+            ?.style.getPropertyValue("--zrdb-table-font-size") === "18px",
+        () => "open table did not apply saved typography",
+      );
+      const app =
+        Zotero.getMainWindow().document.querySelector<HTMLElement>(
+          ".zrdb-app",
+        )!;
+      assert.equal(
+        app.style.getPropertyValue("--zrdb-table-heading-font-size"),
+        "20px",
+      );
+      assert.include(
+        app.style.getPropertyValue("--zrdb-table-font-family"),
+        "Arial",
+      );
       for (const [key, value] of Object.entries(expected)) {
         const actual = Zotero.Prefs.get(PREFIX + key, true);
         assert.strictEqual(
@@ -909,6 +975,7 @@ describe("preferences persistence in the real Zotero settings window", function 
         failure.message += "\n" + windowErrors.join("\n");
     }
     if (isolated) {
+      controller.setMode(originalMode);
       if (workspaceTouched && win && !win.closed) {
         try {
           await open("fields");
