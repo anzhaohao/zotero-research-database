@@ -21,30 +21,27 @@ pref("zoteroFigureShowFormulas", true);
 pref("mineruFigureFallback", true);
 pref("figureImageQuality", "high");
 pref("agentKind", "codex-cli");
-pref("agentExecutable", "codex");
+pref("agentExecutable", "");
 pref("agentArgs", "");
 pref("agentEndpoint", "http://127.0.0.1:11434");
 pref("agentApiKey", "");
 pref("agentModel", "");
 pref("agentReasoningEffort", "");
+pref("agentProtocol", "chat-completions");
 pref("agentTimeoutMs", 900000);
+pref("agentProviders", "");
+pref("agentProviderID", "default");
 pref("agentSettingsVersion", 0);
 pref("mineruMode", "self-hosted");
-pref("mineruSharedStoreDirectory", "E:\\software\\Zotero\\mineru-shared-store");
+pref("mineruSharedStoreDirectory", "");
 pref("mineruOfficialEndpoint", "");
 pref("mineruOfficialToken", "");
 pref("mineruOfficialTokenEnvironment", "MINERU_API_TOKEN");
 pref("mineruSelfHostedEndpoint", "http://127.0.0.1:8000");
 pref("mineruSelfHostedAutoStart", true);
-pref("mineruSelfHostedProjectDirectory", "E:\\software\\DockerProject\\MinerU");
-pref(
-  "mineruDockerExecutable",
-  "E:\\software\\docker\\resources\\bin\\docker.exe",
-);
-pref(
-  "mineruDockerDesktopExecutable",
-  "E:\\software\\docker\\Docker Desktop.exe",
-);
+pref("mineruSelfHostedProjectDirectory", "");
+pref("mineruDockerExecutable", "");
+pref("mineruDockerDesktopExecutable", "");
 pref("mineruBackend", "pipeline");
 pref("mineruTier", "standard");
 pref("mineruMethod", "auto");

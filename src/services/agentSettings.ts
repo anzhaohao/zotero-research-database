@@ -4,6 +4,7 @@ import {
   AGENT_REASONING_EFFORTS,
   type AgentAdapterKind,
   type AgentBridge,
+  type AgentApiProtocol,
   type AgentProfile,
   type AgentReasoningEffort,
 } from "./externalAgent";
@@ -18,6 +19,13 @@ const supportedKinds = new Set<AgentAdapterKind>([
 const AGENT_SETTINGS_VERSION = 2;
 const LEGACY_CODEX_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_TIMEOUT_MS = 900_000;
+const AGENT_PROVIDERS_PREF = "agentProviders";
+const ACTIVE_AGENT_PROVIDER_PREF = "agentProviderID";
+
+export interface SavedAgentProvider extends AgentProfile {
+  id: string;
+  name: string;
+}
 
 export interface AgentModelOption {
   value: string;
@@ -62,17 +70,9 @@ export interface AgentSettingsInput {
   apiKey?: unknown;
   model: unknown;
   reasoningEffort?: unknown;
+  apiProtocol?: unknown;
   timeoutMs: unknown;
 }
-
-export const AGENT_PRESETS: Record<
-  "claude-code",
-  Pick<AgentProfile, "executable" | "endpoint">
-> = {
-  "claude-code": {
-    executable: "C:\\Users\\anzhaofeng\\.local\\bin\\claude.exe",
-  },
-};
 
 export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
   const rawKind = String(input.kind || "codex-cli") as AgentAdapterKind;
@@ -96,7 +96,6 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
     args = parsed;
   }
   const timeoutMs = Number(input.timeoutMs);
-  const preset = kind === "claude-code" ? AGENT_PRESETS[kind] : undefined;
   const rawExecutable = String(input.executable || "").trim();
   const rawEndpoint = String(input.endpoint || "").trim();
   const apiKey = String(input.apiKey || "").trim();
@@ -106,23 +105,31 @@ export function parseAgentProfile(input: AgentSettingsInput): AgentProfile {
   ).includes(rawReasoningEffort)
     ? (rawReasoningEffort as AgentReasoningEffort)
     : undefined;
+  const rawProtocol = String(input.apiProtocol || "").trim();
+  const apiProtocol: AgentApiProtocol | undefined =
+    rawProtocol === "responses" || rawProtocol === "chat-completions"
+      ? rawProtocol
+      : undefined;
   return {
     kind,
+    // Older releases used "codex" as the default value. Treat it as automatic
+    // discovery so those installations also gain the common-location fallback.
     executable:
-      (preset && (!rawExecutable || rawExecutable === "codex")
-        ? preset.executable
+      (kind === "codex-cli" && rawExecutable === "codex"
+        ? undefined
         : rawExecutable) || undefined,
     args,
     endpoint: rawEndpoint || undefined,
     ...(apiKey ? { apiKey } : {}),
     model: String(input.model || "").trim() || undefined,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(apiProtocol ? { apiProtocol } : {}),
     timeoutMs:
       Number.isFinite(timeoutMs) && timeoutMs >= 1000 ? timeoutMs : 900_000,
   };
 }
 
-export function readAgentProfile(): AgentProfile {
+function readLegacyAgentProfile(): AgentProfile {
   return parseAgentProfile({
     kind: getPref("agentKind"),
     executable: getPref("agentExecutable"),
@@ -131,8 +138,74 @@ export function readAgentProfile(): AgentProfile {
     apiKey: getPref("agentApiKey"),
     model: getPref("agentModel"),
     reasoningEffort: getPref("agentReasoningEffort"),
+    apiProtocol: getPref("agentProtocol"),
     timeoutMs: getPref("agentTimeoutMs"),
   });
+}
+
+function providerFromUnknown(value: unknown): SavedAgentProvider | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const entry = value as Record<string, unknown>;
+  const profile = parseAgentProfile({
+    kind: entry.kind,
+    executable: entry.executable,
+    args: JSON.stringify(entry.args || []),
+    endpoint: entry.endpoint,
+    apiKey: entry.apiKey,
+    model: entry.model,
+    reasoningEffort: entry.reasoningEffort,
+    apiProtocol: entry.apiProtocol,
+    timeoutMs: entry.timeoutMs,
+  });
+  const id = String(entry.id || "").trim();
+  const name = String(entry.name || "").trim();
+  if (!id || !name) return undefined;
+  return { id, name, ...profile };
+}
+
+export function readAgentProviders(): SavedAgentProvider[] {
+  const raw = String(getPref(AGENT_PROVIDERS_PREF) || "").trim();
+  if (raw) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(
+        "供应商配置已损坏，未用旧设置覆盖；请检查本机 agentProviders 偏好设置",
+        { cause: error },
+      );
+    }
+    if (!Array.isArray(parsed) || !parsed.length)
+      throw new Error("供应商配置无效：至少需要一个供应商");
+    const providers = parsed.map(providerFromUnknown);
+    if (providers.some((provider) => !provider))
+      throw new Error("供应商配置无效：存在缺少 ID 或名称的条目");
+    const valid = providers as SavedAgentProvider[];
+    if (new Set(valid.map((provider) => provider.id)).size !== valid.length)
+      throw new Error("供应商配置无效：供应商 ID 重复");
+    return valid;
+  }
+  return [{ id: "default", name: "默认供应商", ...readLegacyAgentProfile() }];
+}
+
+export function activeAgentProviderID(): string {
+  const providers = readAgentProviders();
+  const saved = String(getPref(ACTIVE_AGENT_PROVIDER_PREF) || "").trim();
+  return providers.some((provider) => provider.id === saved)
+    ? saved
+    : providers[0].id;
+}
+
+export function readActiveAgentProvider(): SavedAgentProvider {
+  const providers = readAgentProviders();
+  return (
+    providers.find((provider) => provider.id === activeAgentProviderID()) ||
+    providers[0]
+  );
+}
+
+export function readAgentProfile(): AgentProfile {
+  return readActiveAgentProvider();
 }
 
 /** Upgrade local-only Agent defaults without touching synced workspace data. */
@@ -162,5 +235,58 @@ export function saveAgentProfile(profile: AgentProfile): void {
   setPref("agentApiKey", profile.apiKey || "");
   setPref("agentModel", profile.model || "");
   setPref("agentReasoningEffort", profile.reasoningEffort || "");
+  setPref("agentProtocol", profile.apiProtocol || "chat-completions");
   setPref("agentTimeoutMs", profile.timeoutMs);
+}
+
+export function saveAgentProviders(providers: SavedAgentProvider[]): void {
+  if (!providers.length) throw new Error("至少需要保留一个供应商");
+  const normalized = providers.map((provider) => {
+    const parsed = providerFromUnknown(provider);
+    if (!parsed) throw new Error("供应商 ID 和名称不能为空");
+    return parsed;
+  });
+  if (
+    new Set(normalized.map((provider) => provider.id)).size !==
+    normalized.length
+  )
+    throw new Error("供应商 ID 不能重复");
+  setPref(AGENT_PROVIDERS_PREF, JSON.stringify(normalized));
+}
+
+export function saveActiveAgentProvider(
+  provider: SavedAgentProvider,
+  providers = readAgentProviders(),
+): void {
+  const next = providers.some((entry) => entry.id === provider.id)
+    ? providers.map((entry) => (entry.id === provider.id ? provider : entry))
+    : [...providers, provider];
+  saveAgentProviders(next);
+  setPref(ACTIVE_AGENT_PROVIDER_PREF, provider.id);
+  saveAgentProfile(provider);
+}
+
+export function switchAgentProvider(providerID: string): SavedAgentProvider {
+  const providers = readAgentProviders();
+  const provider = providers.find((entry) => entry.id === providerID);
+  if (!provider) throw new Error("找不到所选供应商");
+  setPref(ACTIVE_AGENT_PROVIDER_PREF, provider.id);
+  saveAgentProfile(provider);
+  return provider;
+}
+
+export function deleteAgentProvider(providerID: string): SavedAgentProvider {
+  const providers = readAgentProviders();
+  if (providers.length <= 1) throw new Error("至少需要保留一个供应商");
+  const next = providers.filter((provider) => provider.id !== providerID);
+  if (next.length === providers.length) throw new Error("找不到所选供应商");
+  const previousActiveID = activeAgentProviderID();
+  saveAgentProviders(next);
+  const nextActive =
+    providerID === previousActiveID
+      ? next[0]
+      : next.find((provider) => provider.id === previousActiveID) || next[0];
+  setPref(ACTIVE_AGENT_PROVIDER_PREF, nextActive.id);
+  saveAgentProfile(nextActive);
+  return nextActive;
 }

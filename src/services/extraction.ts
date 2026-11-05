@@ -7,7 +7,7 @@ import type {
 } from "../domain/types";
 import { ResearchRepository } from "../storage/repository";
 import { resolveSourceText } from "./contentSource";
-import type { AgentBridge } from "./externalAgent";
+import type { AgentBridge, AgentResult } from "./externalAgent";
 
 export { validateExtractedValues } from "./externalAgent";
 
@@ -16,10 +16,12 @@ export interface ExtractionProgress {
   fieldIDs: string[];
   state: "running" | "success" | "failed" | "cancelled";
   message: string;
+  /** A validated, persisted result, available before the rest of the paper finishes. */
+  record?: ItemResearchRecord;
 }
 
 type SourceResolver = typeof resolveSourceText;
-const MAX_AGENT_INPUT_CHARS = 20_000;
+const MAX_AGENT_INPUT_CHARS = 200_000;
 
 export interface PreparedExtractionText {
   text: string;
@@ -28,6 +30,7 @@ export interface PreparedExtractionText {
 }
 
 export interface ExtractionRunOptions {
+  requestedFieldIDsByItem?: ReadonlyMap<string, readonly string[]>;
   /** Restrict a run to these stable research field IDs. */
   requestedFieldIDs?: string[];
   /** Allow an explicit single-cell regeneration to replace manual edits. */
@@ -36,16 +39,18 @@ export interface ExtractionRunOptions {
 
 export class ExternalAgentExtractionService {
   private cancelled = false;
+  private activeAgent?: AgentBridge;
 
   constructor(
     private repository: ResearchRepository,
-    private agent: AgentBridge,
+    private agent: AgentBridge | (() => AgentBridge),
     private sourceResolver: SourceResolver = resolveSourceText,
   ) {}
 
   cancel(): void {
     this.cancelled = true;
-    this.agent.cancel();
+    if (this.activeAgent) this.activeAgent.cancel();
+    else if (typeof this.agent !== "function") this.agent.cancel();
   }
 
   async run(
@@ -55,10 +60,14 @@ export class ExternalAgentExtractionService {
     options: ExtractionRunOptions = {},
   ): Promise<void> {
     this.cancelled = false;
-    const requestedFieldIDs = options.requestedFieldIDs?.length
-      ? new Set(options.requestedFieldIDs)
-      : undefined;
     for (const item of items) {
+      const requested =
+        options.requestedFieldIDsByItem?.get(item.key) ||
+        options.requestedFieldIDs;
+      const requestedFieldIDs = requested?.length
+        ? new Set(requested)
+        : undefined;
+      const completed = new Set<string>();
       let fieldIDs = workspace.fields
         .filter(
           (field) =>
@@ -110,37 +119,136 @@ export class ExternalAgentExtractionService {
         const source = await this.sourceResolver(item);
         this.throwIfCancelled();
         const prepared = prepareExtractionText(source.text);
+        if (prepared.focused)
+          throw new Error(
+            "论文全文超过 200,000 字符，本次未发送；为避免遗漏，插件不会自动截断全文。请拆分超长文档后重试",
+          );
         stage = "外部 Agent 处理";
         onProgress({
           itemKey: item.key,
           fieldIDs,
           state: "running",
           message: `正在调用外部 Agent（${
-            source.pdfPath ? "主 PDF + 全文" : sourceLabel(source.type)
+            source.pdfPath && !prepared.text.trim()
+              ? "主 PDF（无全文文本）"
+              : sourceLabel(source.type)
           }，${inputLengthLabel(prepared)}）`,
         });
+        // A fresh bridge per paper makes session isolation explicit and keeps
+        // process and cancellation bookkeeping scoped to the current paper.
+        const agent =
+          typeof this.agent === "function" ? this.agent() : this.agent;
+        if (
+          !prepared.text.trim() &&
+          (agent.kind === "openai-compatible" ||
+            agent.kind === "ollama" ||
+            agent.kind === "codex-cli")
+        ) {
+          throw new Error(
+            "PDF 没有可确认完整的可读全文。请先运行 MinerU 或 OCR，再填充文献；当前填充方式需要完整论文文本",
+          );
+        }
         const staged = await stageAgentDocument(
           item.key,
           source,
           prepared.text,
         );
         let result;
-        try {
+        let latestRecord = record;
+        const persistResult = async (
+          partial: AgentResult<Record<string, unknown>>,
+        ) => {
           this.throwIfCancelled();
-          result = await this.agent.extractFields(fields, staged.input);
-        } finally {
-          await staged.cleanup();
-        }
-        this.throwIfCancelled();
-        if (this.cancelled) {
+          const values = Object.fromEntries(
+            Object.entries(partial.value).filter(([id]) => !completed.has(id)),
+          );
+          if (!Object.keys(values).length) return;
+          const audit = {
+            executor: agent.kind === "codex-cli" ? "codex" : "external-agent",
+            executorVersion: partial.executorVersion,
+            inputType: source.type,
+            inputHash: source.hash,
+            generatedAt: new Date().toISOString(),
+            templateVersion: Math.max(
+              ...fields
+                .filter((field) => Object.hasOwn(values, field.id))
+                .map((field) => field.extraction.templateVersion),
+            ),
+          } as const;
+          const updater = (current: ItemResearchRecord) =>
+            applyAgentValues(current, values, audit, {
+              overwriteLocked: options.overwriteLockedFields,
+            });
+          if (typeof this.repository.updateRecord === "function") {
+            latestRecord = await this.repository.updateRecord(
+              item,
+              updater,
+              workspace.fields,
+            );
+          } else {
+            latestRecord = updater(latestRecord);
+            await this.repository.saveRecord(
+              item,
+              latestRecord,
+              workspace.fields,
+            );
+          }
+          Object.keys(values).forEach((id) => completed.add(id));
+          fieldIDs = fields
+            .map((field) => field.id)
+            .filter((id) => !completed.has(id));
           onProgress({
             itemKey: item.key,
             fieldIDs,
-            state: "cancelled",
-            message: "已取消，未写入",
+            state: "running",
+            message: `已保存 ${completed.size}/${fields.length} 个字段，其余继续生成`,
+            record: latestRecord,
           });
-          continue;
+        };
+        let heartbeat: ReturnType<typeof setInterval> | undefined;
+        const agentStartedAt = Date.now();
+        try {
+          this.activeAgent = agent;
+          heartbeat = setInterval(() => {
+            const elapsedSeconds = Math.max(
+              1,
+              Math.floor((Date.now() - agentStartedAt) / 1000),
+            );
+            onProgress({
+              itemKey: item.key,
+              fieldIDs,
+              state: "running",
+              message: "外部 Agent 处理中（已等待 " + elapsedSeconds + " 秒）",
+            });
+          }, 15_000);
+          this.throwIfCancelled();
+          let lastProgressAt = 0;
+          result = await agent.extractFields(
+            fields,
+            staged.input,
+            (progress) => {
+              if (Date.now() - lastProgressAt < 500) return;
+              lastProgressAt = Date.now();
+              onProgress({
+                itemKey: item.key,
+                fieldIDs,
+                state: "running",
+                message:
+                  progress.phase === "writing"
+                    ? "AI 正在生成（已接收 " +
+                      progress.receivedCharacters +
+                      " 字符）"
+                    : "AI 已连接，正在分析论文",
+              });
+            },
+            persistResult,
+          );
+        } finally {
+          if (heartbeat) clearInterval(heartbeat);
+          if (this.activeAgent === agent) this.activeAgent = undefined;
+          await staged.cleanup();
         }
+        this.throwIfCancelled();
         stage = "保存研究属性";
         onProgress({
           itemKey: item.key,
@@ -148,45 +256,13 @@ export class ExternalAgentExtractionService {
           state: "running",
           message: "正在保存研究属性",
         });
-        const audit = {
-          executor:
-            this.agent.kind === "codex-cli" ? "codex" : "external-agent",
-          executorVersion: result.executorVersion,
-          inputType: source.type,
-          inputHash: source.hash,
-          generatedAt: new Date().toISOString(),
-          templateVersion: Math.max(
-            ...fields.map((field) => field.extraction.templateVersion),
-          ),
-        } as const;
-        this.throwIfCancelled();
-        const repositoryWithUpdater = this.repository as ResearchRepository & {
-          updateRecord?: ResearchRepository["updateRecord"];
-        };
-        if (typeof repositoryWithUpdater.updateRecord === "function") {
-          await repositoryWithUpdater.updateRecord(
-            item,
-            (latest) =>
-              applyAgentValues(latest, result.value, audit, {
-                overwriteLocked: options.overwriteLockedFields,
-              }),
-            workspace.fields,
-          );
-        } else {
-          // Compatibility for lightweight test doubles and older integrations.
-          await this.repository.saveRecord(
-            item,
-            applyAgentValues(record, result.value, audit, {
-              overwriteLocked: options.overwriteLockedFields,
-            }),
-            workspace.fields,
-          );
-        }
+        await persistResult(result);
         onProgress({
           itemKey: item.key,
           fieldIDs,
           state: "success",
           message: "Agent 提取完成",
+          record: latestRecord,
         });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -195,8 +271,10 @@ export class ExternalAgentExtractionService {
           fieldIDs,
           state: this.cancelled ? "cancelled" : "failed",
           message: this.cancelled
-            ? "已取消，未写入"
-            : `${stage}失败：${detail}`,
+            ? completed.size
+              ? `已取消，已保存的 ${completed.size} 个字段保留`
+              : "已取消，未写入"
+            : `${stage}失败：${detail}${completed.size ? `（已保存 ${completed.size} 个字段）` : ""}`,
         });
       }
     }
@@ -231,6 +309,9 @@ async function stageAgentDocument(
     text,
     sourceType: source.type,
   };
+  // Reuse readable paper content instead of copying and parsing the same PDF
+  // a second time. Direct PDF reading is only needed for scanned/unindexed files.
+  if (text.trim()) return { input: textOnly, cleanup: async () => undefined };
   const pathUtils = (globalThis as any).PathUtils as
     | {
         tempDir?: string;
@@ -261,9 +342,7 @@ async function stageAgentDocument(
     typeof io.write !== "function" ||
     typeof io.remove !== "function"
   ) {
-    if (!text.trim())
-      throw new Error("无法安全暂存 PDF，且没有可供 Agent 使用的全文文本");
-    return { input: textOnly, cleanup: async () => undefined };
+    throw new Error("无法安全暂存 PDF，且没有可供 Agent 使用的全文文本");
   }
 
   const directory = pathUtils.join(
@@ -299,11 +378,9 @@ async function stageAgentDocument(
     };
   } catch (error) {
     await io.remove(directory, { recursive: true, ignoreAbsent: true });
-    if (!text.trim())
-      throw new Error("PDF 暂存失败且没有可供 Agent 使用的全文文本", {
-        cause: error,
-      });
-    return { input: textOnly, cleanup: async () => undefined };
+    throw new Error("PDF 暂存失败且没有可供 Agent 使用的全文文本", {
+      cause: error,
+    });
   }
 }
 

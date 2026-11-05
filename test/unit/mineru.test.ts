@@ -4,6 +4,7 @@ import { config } from "../../package.json";
 import {
   buildSelfHostedMultipartBody,
   buildMinerUDockerComposeArguments,
+  dockerDesktopExecutableCandidates,
   findLlmForZoteroMineruCache,
   markdownFromZip,
   MinerUConversionService,
@@ -307,6 +308,37 @@ describe("MinerU integration", function () {
         officialEndpoint: "https://mineru.net/api/v4/file-urls/batch",
       }).officialEndpoint,
     ).to.equal("https://mineru.net/api/v4");
+  });
+
+  it("does not embed the developer machine's paths in portable defaults", function () {
+    const profile = selfHostedProfile();
+    for (const value of [
+      profile.sharedStoreDirectory,
+      profile.selfHostedProjectDirectory,
+      profile.dockerExecutable,
+      profile.dockerDesktopExecutable,
+    ]) {
+      expect(value).to.not.match(/E:\\software|C:\\Users\\anzhaofeng/i);
+    }
+  });
+
+  it("finds Docker Desktop in platform-specific common locations", function () {
+    const join = (...parts: string[]) => parts.join("\\");
+    expect(
+      dockerDesktopExecutableCandidates(
+        "WINNT",
+        {
+          ProgramFiles: "C:\\Program Files",
+          "ProgramFiles(x86)": "C:\\Program Files (x86)",
+          LOCALAPPDATA: "C:\\Users\\reader\\AppData\\Local",
+        },
+        join,
+      ),
+    ).to.deep.equal([
+      "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+      "C:\\Program Files (x86)\\Docker\\Docker\\Docker Desktop.exe",
+      "C:\\Users\\reader\\AppData\\Local\\Programs\\Docker\\Docker\\Docker Desktop.exe",
+    ]);
   });
 
   it("migrates a token mistakenly stored as an environment variable name", function () {

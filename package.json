@@ -1,7 +1,7 @@
 {
   "name": "zotero-research-database",
   "type": "module",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "description": "Notion-like research database views with an external Codex bridge for Zotero 9/10",
   "private": true,
   "config": {
@@ -43,6 +43,7 @@
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
+    "smol-toml": "1.9.1",
     "zod": "^4.6.7",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },

@@ -627,8 +627,8 @@ The 0.3.33 artifact implemented formula rendering and settings/menu consolidatio
 
 ## 2026-09-09 发布前修复（0.3.35）
 
-- 研究数据库目录切换改为“保存下次启动指针”：当前 Zotero 会话锁定已打开的数据根目录，选择新目录只修改设置页控件，保存后重启才生效，避免旧内存缓存覆盖新库。
-- 新目录只初始化自己的 `database.json`、`settings.json`、`manifest.json` 与事务目录；不会从其它 Profile 自动搬迁研究数据。显式使用旧默认目录时，`research-data-v1.json` 可安全迁移为 `database.json`。
+- 此处原先记载的“保存时复制、启动空库时自动导入默认库”方案已被 2026-11-05 的修复取代：保存只安排迁移，重启后在初始化仓库前复制并校验，成功才切换。
+- 新目录不会因 `items` 为空就自动覆盖工作区。旧默认库恢复必须有明确来源和当前库校验保护；详见末尾 2026-11-05 记录。
 - 本机研究数据读取增加主文件/`.bak` 的 schema 校验和原子恢复；主备均损坏时拒绝覆盖。便携设置严格白名单过滤，接口令牌和 `dataRoot` 不进入 `settings.json`。
 - 设置写入等待持久化队列完成后才报告成功；初始化失败可重试，损坏设置文件不会被默认值静默覆盖。
 - 本轮 179 项单元测试、两套 TypeScript 检查和针对设置存储的回归均通过；正式 Zotero 未安装本轮 XPI。
@@ -666,3 +666,68 @@ The 0.3.33 artifact implemented formula rendering and settings/menu consolidatio
 - 使用修正后的 `https://mineru.net/api/v4/file-urls/batch` 和已保存 Token 实测：HTTP 200、`code: 0`，成功返回批次 ID 与上传地址。该验证未上传 PDF、未启动解析，也未记录 Token 或签名 URL。
 - 回归：216 项单元测试通过，TypeScript、Prettier、ESLint、生产构建和 `git diff --check` 通过。
 - 当前交付包：`release/zotero-research-database.xpi`；大小：888897 字节；SHA-256：`E6A87DF2AF0BAD19A3A108DEDC7FCD1CEB87FF68737782FBBFA4970E3974D9B0`。安装后重启 Zotero 会执行地址迁移。
+
+## 2026-11-05 AI 填充闭环与安全迁移（0.3.40，未提交）
+
+- 当前分支 `codex/shared-mineru-store`，保留所有前序未提交修改；本轮没有 commit、push 或安装到正式 Profile。项目修改前备份：`E:\software\AI改前备份\20261105_021804_ZRDB迁移与AI填充修复前_codex`。Obsidian 本轮只读。
+- 真实根因：七字段整篇输出约 86 秒遭上游断流，已有约 3249 字符却不能形成完整结果。旧非流式等待、最后整篇保存使用户一直看不到结果。
+- 新增 `agentResponse.ts`：Responses/Chat SSE 增量读取，UTF-8 分块、结束事件、超时/取消、截断和 4 MB 上限；错误脱敏 API key，不保留含密钥的 cause。
+- `ConfiguredAgentBridge` API 按字段发起请求，最多 3 并发，每字段保留全文；校验后用 `onPartial` 立即落盘。没有启动 CLI 子代理。输入用量会因全文重复发送增加，协议、模型、强度不自动变更。
+- `extraction.ts`/表格收到已保存记录后即更新，保护运行中的人工编辑；失败/取消保留完成字段，重试仅覆盖未完成字段。超过 200000 字符明确停止，不静默截断。
+- `contentSource.ts` 使用 `Zotero.Fulltext.isFullyIndexed()` 校验缓存完整性，部分缓存先 complete 重建，失败后不给 API 发送片段；扫描件无可读全文时 API/Ollama/隔离 Codex 直接提示先做 MinerU/OCR，不能假定没有 PDF 读取工具的 Codex 收到路径后就能读全文。
+
+### 真实验证与限制
+
+- 详见 `docs/AI_FILL_VALIDATION_2026-11-05.md`。生产桥接代码实测两篇完整 MinerU 全文（37223、43830 字符），七字段 high 分别 131.0、116.5 秒，首个研究字段约 24.9、26.3 秒；同篇 medium 对照 102.2 秒，没有修改用户设置。
+- Zotero 10.0.7 隔离 Profile 使用真实附件、真实供应商和研究仓库完整运行：约 133 秒，七次逐字段保存、重新读取核对一致。已完整阅读两篇生成输出和 MinerU 原文并核对关键数值、图号及推论边界，未发现关键事实错误；不能据此保证所有论文 100% 准确或秒级完成。
+- 正式 Profile 保存的默认仍是 Codex CLI（`k3.1-pro / max`），实测通过的是另一已保存供应商 `601lab`（`gpt-6.1-sol / Responses / high`）。安装后应选择该供应商并保存；没有把 API 实测说成 CLI 也已达标。
+- 最终 293 项单元测试、两套 TypeScript、Prettier/ESLint 通过。真实宿主填充 1 项；原生迁移/旧库恢复 2 项及设置持久化 1 项通过。最后两个全文质量边界新增 4 项单元回归。
+- 测量和 fixture 均在忽略的 `.scaffold/`；真实密钥仅测试时从既有 prefs 读取，未写入源码、测试 Profile 或报告。不要提交原始论文、用户输出或 prefs。
+- 真实集成测试必须 `npm test -- --no-watch`，不要默认 watch，避免编辑时重复发送付费 API。需要完整真实填充时才设置 `ZRDB_TEST_LIVE_AGENT_FIXTURE`；用 `ZRDB_TEST_GREP` 限定范围。所有前序测试进程已结束，正式 Zotero 未关闭。
+- Windows 原生 GUI 枚举可用，但截图仅壁纸、输入无法激活窗口；已停止输入，没有绕过限制或杀正式 Zotero。未完成正式窗口的可视渲染验收。
+
+### 目录迁移与本机旧库恢复
+
+- `directoryMigration.ts`：保存仅安排计划，重启在初始化仓库前复制最新数据，SHA-256 校验、数据库解析通过后才切换目录。支持配置数据、独立产物及共享 MinerU 目录，目标同内容复用、不同内容拒绝覆盖，拒绝嵌套/交叉路径与符号链接；仅重写已知内部 JSON，普通产物字节保留。
+- 迁移 relink 原有附件而不建重复条目，失败回滚附件及偏好，允许重试。迁移失败继续打开旧库并显示原因。不得恢复此前“空库就自动覆盖工作区”的危险实现。
+- `dataRecovery.ts`：显式安排恢复，先验证来源并备份当前库，运行中的数据库不变。启动时校验来源、目标预期 hash 和备份；若当前库出现新编辑则拒绝覆盖，原子写入且支持崩溃后幂等完成。
+- 当前配置库 `E:\software\Zotero\zotero-research-database\config\database.json` 仍为 0 条；旧 Profile 库有 34 条、16 字段，文件未丢失。产物位于同根的 `data`。
+- 恢复备份：`E:\software\AI改前备份\20261105_ZRDB旧库恢复待重启_codex`，包括 current-config、原 prefs、原安装包、recovered-database.json 和 current-database-before-restore.json。其中 prefs 含私密配置，禁止打印/提交。
+- 已在当前 config 写入 `pending-data-recovery.json`，来源/备份/目标 hash 均已核对一致。**恢复已安排但尚未执行，必须新版安装并重启才执行；不能声称正式库已恢复。** 不要重复执行 `.scaffold/prepare-real-recovery.ts`，它会因备份已存在拒绝。
+
+### 交付与后续操作
+
+- 版本提升为 0.3.40，插件 ID 保持不变。交付只用 `release/zotero-research-database.xpi`；构建覆盖前会把不同内容的旧包自动复制到 `release/archive/`，相同内容不重复归档。
+- 目前未获得本轮新 commit/push 授权；不要代替用户发布。正式 Profile 未安装本包，后续如安装，应先正常退出正在运行的 Zotero，并保留上述恢复备份。
+- 03:15 生产构建：1017421 字节，SHA-256 `5CDE55155A3ABD6C89C82E174F09B349FFF5DED0C8689727D7DE629D29FBF418`；后续构建会按规范归档该包，最终交付以末尾记录为准。
+
+### 03:45 继续验收：Codex 的真实失败与未完成项
+
+- 本轮是实际进展：修复子进程管道读取、Codex 连接检查超时和独立配置；没有把旧状态说明当成完成。当前目标仍为“解决上面的所有问题到可用为止”，尚未完成。
+- Codex CLI 0.166.0 的真实生产桥接 smoke 检查（保存的 `k3.1-pro / max`）失败；本地路由 `127.0.0.1:15730/v1/responses` 上游返回 503，CLI 重连。`.scaffold/live-zotero-report-codex.json` 保存最新失败，不能把它记录成通过；API `601lab` 的两篇完整论文和真实落盘结果仍是另一条已通过路径。
+- Gecko 原生 Subprocess 的 `readString()` 只读一个 chunk，旧版各 CLI 桥接只读一次，所以错误会停在 `OpenAI Codex v`。新增 `subprocessOutput.ts` 连续读取到 EOF，保留有界尾部并继续清空管道；Codex 超时保留实际网络诊断，UI 对 503 明确提示服务不可用。简单连接检查上限 60 秒，正式填充仍尊重已保存超时。
+- `codexWorkerConfig.ts` 用固定依赖 `smol-toml@1.9.1` 解析真实 TOML，只复制模型、供应商、认证和选定 profile 的路由；相对模型目录转为原 home 下的绝对路径。排除 MCP/hooks/plugins/项目指令，不修改用户原文件。配置解析错误不回显可能含密钥的源行。准备失败也会清理临时目录。
+- 已撤销试验性的逐项 MCP 命令行覆盖方案；空表会合并而非清除，虚拟服务和带点名称会出现 invalid transport。最终方案是生成最小独立配置，不再枚举或覆盖这些服务。
+- 真实 Zotero 的 CLI 配置隔离用例通过（214ms、没有启用的 MCP）；随后用最终方案调用原保存模型仍在 60 秒内以包含 503 的诊断失败。没有静默切换模型、供应商、协议或思考强度。
+- 最终 303 项单元测试通过，TypeScript 与 lint 通过。新 `codexLive.test.ts` 仅 `ZRDB_TEST_LIVE_CODEX=1` 时启用；真实调用还需显式 fixture，避免普通测试误发付费请求。仅配置验证不需要 fixture、不会调用模型。始终使用 `--no-watch`。
+- 正式 Profile 当前安装 0.3.39、active=true；当前库仍 0 条，恢复计划的 source/target/backup hash 全部匹配，旧 34 条仍待恢复。Windows 输入点击返回 `coordinate input geometry is unavailable`，重新选择后激活仍返回 `failed to activate captured window`，已停止输入，未强杀/替换运行中的正式实例。
+- 剩余验收需要用户在正式 Zotero 安装新版、正常重启，并选择已通过实测的 `601lab`；随后验证 34 条恢复及正式表格交互。若用户坚持当前 Codex `k3.1-pro`，还需其路由上游恢复可用。不要在这些条件未满足时标记整体目标完成。
+- `.scaffold/remaining-gates.py` 只读检查安装版本及恢复计划完整性，可用于下一轮确认真实状态变化；没有新 commit/push 授权，工作树改动继续保留。
+- 03:47 最终生产包：`release/zotero-research-database.xpi`，0.3.40，1026831 字节，SHA-256 `5DB559624E5CF0ED45FECE55171CC0C8889936C9D0311B7653ADF5778550557C`，47 个 ZIP 条目完整。上个包已归档到 `release/archive/`。此包包含本轮子进程与 Codex 隔离修复。
+
+### 用户安装并切换后的正式环境核验（2026-11-05）
+
+- 用户回复“已安装切换”。只读核验确认正式安装 0.3.40、active=true，安装包与最终 release 包 SHA-256 完全相同；不要仅凭版本号判断包一致。正式偏好已选中 `601lab / gpt-6.1-sol / Responses / high`。
+- 恢复计划已完成，正式数据库现有 34 条记录、16 字段，解析后的整个数据库与备份中的 `recovered-database.json` 完全相同，包括字段、视图、历史值及映射。不要再次运行恢复准备脚本。
+- 当前 Zotero 中仍存在 28 条对应文献，关联产物无缺失；325 个产物文件全部通过 SHA-256 核对。另 6 条历史记录的 Zotero 条目返回 404，其中 4 条关联的 70 个产物在当前 data 和旧 Profile artifacts 根目录均不存在。保留历史记录，没有删除或伪造产物；不能声称所有历史文件均恢复。核验报告：忽略目录 `.scaffold/formal-install-recovery-check.json`。
+- 正式 Zotero 10.0.7 本地 API/Connector 正常。重新枚举后的正式窗口可访问性树能读到研究内容、PDF 预览和论文图表，但截图仍是壁纸；点击“字段与工具”返回 `point (2052, 148) is outside window bounds ... width: 1920`，重新选择后激活返回 `failed to activate captured window`。遵循 Computer Use 恢复规则，已停止输入，没有改用 PowerShell UI Automation、没有强杀实例，也没有触发正式库填充。
+- 正式安装、供应商切换和数据库恢复已通过；正式窗口点击填充、可视进度及关闭重开仍未验收。既有两篇 API 质量/速度测试和隔离 Zotero 逐字段保存结果继续有效，未无理由重复付费调用。Codex CLI 上游 503 未复测或宣布修好。
+- 本轮只更新核验文档，无源码修改、无重新构建、无 commit/push。下一步需要在可控制的正式窗口触发一次文献填充并核对逐字段保存；当前窗口控制故障不能记成插件测试通过。
+
+### 正式填充成功确认（2026-11-05 08:52 后）
+
+- 用户手动触发后回复“成功了”，提供正式表格截图。已只读核验当前磁盘数据库：`JSQB8T5Q` revision 32→38，六个未锁定字段分次保存，包括五个研究字段及中文标题内部字段；原题为中文，翻译值为空。已有人工锁定的“结果与证据”值逐项完全保留。
+- 首次保存 08:51:16.737，末次保存 08:52:34.908，跨度 78.171 秒。未采集点击时刻，不声称这是完整请求耗时。五个研究字段分别 730、1853、2371、2530、2156 字符；不是只停留在界面或只生成半篇 JSON。
+- 仍为 34 条记录、16 字段；其他 33 条记录、工作区、该文献产物及图表引用未变化。只读报告 `.scaffold/formal-fill-success-check.json`，禁止提交用户正文或凭据。
+- 正式环境当前 API 路径的填充、界面显示（用户截图）与磁盘保存已获得证据；本轮未验证关闭重开、单字段重试或新输出逐句事实准确性。前序真实 API、宿主集成、人工编辑保护等测试按既有记录引用，不重复付费请求。自动窗口控制仍失败，Codex CLI 上游 503 未解决；不要将 API 成功写成全部 Agent 通过。
+- 文档已更新；无源码修改、无重新打包、无 commit/push。

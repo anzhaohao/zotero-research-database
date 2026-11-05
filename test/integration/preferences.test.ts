@@ -233,6 +233,7 @@ describe("preferences persistence in the real Zotero settings window", function 
       agentApiKey: "ZRDB preferences local API key",
       agentModel: "ZRDB preferences 测试 model",
       agentReasoningEffort: "high",
+      agentProtocol: "responses",
       mineruOfficialToken: "ZRDB preferences saved MinerU token",
       mineruEnableFormula: false,
       mineruEnableTable: true,
@@ -262,6 +263,8 @@ describe("preferences persistence in the real Zotero settings window", function 
       Zotero.Prefs.set(PREFIX + "agentModel", "initial model", true);
       Zotero.Prefs.set(PREFIX + "agentKind", "codex-cli", true);
       Zotero.Prefs.set(PREFIX + "agentArgs", "[]", true);
+      Zotero.Prefs.set(PREFIX + "agentProviders", "", true);
+      Zotero.Prefs.set(PREFIX + "agentProviderID", "default", true);
       Zotero.Prefs.set(PREFIX + "mineruMode", "self-hosted", true);
       Zotero.Prefs.set(
         PREFIX + "mineruSelfHostedEndpoint",
@@ -324,6 +327,17 @@ describe("preferences persistence in the real Zotero settings window", function 
         agentKind.querySelector('option[value="openai-compatible"]'),
         "OpenAI-compatible third-party models are configurable",
       );
+      const executableControl = control(
+        win!,
+        "agentExecutable",
+      ) as HTMLInputElement;
+      const executableField = executableControl.closest(
+        "[data-agent-kinds]",
+      ) as HTMLElement | null;
+      assert.isFalse(
+        executableField?.hidden,
+        "Codex exposes a manual executable path when automatic discovery fails",
+      );
       assert.notExists(
         agentKind.querySelector('option[value="hana-agent"]'),
         "retired Hana settings are absent",
@@ -358,6 +372,15 @@ describe("preferences persistence in the real Zotero settings window", function 
       stage = "switch assistants and reload their model choices";
       agentKind.value = "claude-code";
       agentKind.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      assert.isFalse(
+        executableField?.hidden,
+        "Claude Code exposes the same manual executable path control",
+      );
+      assert.strictEqual(
+        executableControl.value,
+        "",
+        "switching CLIs leaves executable discovery automatic",
+      );
       assert.strictEqual(
         (control(win!, "agentModel") as HTMLInputElement).value,
         "",
@@ -383,6 +406,7 @@ describe("preferences persistence in the real Zotero settings window", function 
       setValue("agentApiKey", String(expected.agentApiKey));
       setValue("agentModel", String(expected.agentModel));
       setValue("agentReasoningEffort", String(expected.agentReasoningEffort));
+      setValue("agentProtocol", String(expected.agentProtocol));
       await open("mineru");
       stage = "verify MinerU token control";
       assert.strictEqual(
@@ -433,6 +457,17 @@ describe("preferences persistence in the real Zotero settings window", function 
           key + " native preference type",
         );
       }
+      const savedProviders = JSON.parse(
+        String(Zotero.Prefs.get(PREFIX + "agentProviders", true) || "[]"),
+      ) as Array<Record<string, unknown>>;
+      assert.lengthOf(savedProviders, 1, "saving creates the provider list");
+      assert.include(savedProviders[0], {
+        id: "default",
+        model: expected.agentModel,
+        apiKey: expected.agentApiKey,
+        apiProtocol: expected.agentProtocol,
+        reasoningEffort: expected.agentReasoningEffort,
+      });
       // Save/readback runs before checking the seed, so a failing old version
       // reports its real setter behavior rather than assuming string pollution.
       stage = "check initial typed preference loading";
@@ -463,6 +498,123 @@ describe("preferences persistence in the real Zotero settings window", function 
         else
           assert.equal(element.value, String(value), key + " restored value");
       }
+
+      stage = "manage multiple providers in the real settings window";
+      await open("agent");
+      const providerSelect = win!.document.getElementById(
+        "zrdb-agent-provider-select",
+      ) as HTMLSelectElement;
+      assert.exists(providerSelect);
+      assert.strictEqual(providerSelect.value, "default");
+      assert.strictEqual(providerSelect.options.length, 1);
+      const protocolSelect = control(
+        win!,
+        "agentProtocol",
+      ) as HTMLSelectElement;
+      assert.exists(protocolSelect.querySelector('option[value="responses"]'));
+      assert.exists(
+        protocolSelect.querySelector('option[value="chat-completions"]'),
+      );
+
+      const secondModel = "ZRDB preferences second model";
+      setValue("agentModel", secondModel);
+      setValue("agentReasoningEffort", "medium");
+      const originalPrompt = win!.prompt;
+      (win as any).prompt = () => "ZRDB 第二供应商";
+      try {
+        await clickVisible(
+          win!,
+          win!.document.getElementById(
+            "zrdb-agent-provider-save",
+          ) as HTMLElement,
+        );
+      } finally {
+        (win as any).prompt = originalPrompt;
+      }
+      await eventually(
+        () => providerSelect.options.length === 2,
+        () => "new provider was not added; " + windowDiagnostics(win),
+      );
+      const secondProviderID = providerSelect.value;
+      assert.notEqual(secondProviderID, "default");
+      const currentProviders = JSON.parse(
+        String(Zotero.Prefs.get(PREFIX + "agentProviders", true) || "[]"),
+      ) as Array<Record<string, unknown>>;
+      const secondProvider = currentProviders.find(
+        (entry) => entry.id === secondProviderID,
+      );
+      assert.exists(secondProvider);
+      assert.include(secondProvider!, {
+        name: "ZRDB 第二供应商",
+        model: secondModel,
+        reasoningEffort: "medium",
+        apiProtocol: "responses",
+        apiKey: expected.agentApiKey,
+      });
+
+      providerSelect.value = "default";
+      providerSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      await eventually(
+        () =>
+          (control(win!, "agentModel") as HTMLInputElement).value ===
+            String(expected.agentModel) &&
+          Zotero.Prefs.get(PREFIX + "agentProviderID", true) === "default",
+        () => "switching did not restore the default provider",
+      );
+      providerSelect.value = secondProviderID;
+      providerSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      await eventually(
+        () =>
+          (control(win!, "agentModel") as HTMLInputElement).value ===
+          secondModel,
+        () => "switching did not restore the second provider",
+      );
+      await clickVisible(
+        win!,
+        win!.document.getElementById(
+          "zrdb-agent-provider-delete",
+        ) as HTMLElement,
+      );
+      await eventually(
+        () => providerSelect.options.length === 1,
+        () => "deleting did not switch to the remaining provider",
+      );
+      assert.strictEqual(providerSelect.value, "default");
+      assert.strictEqual(
+        (control(win!, "agentModel") as HTMLInputElement).value,
+        String(expected.agentModel),
+      );
+      assert.isTrue(
+        (
+          win!.document.getElementById(
+            "zrdb-agent-provider-delete",
+          ) as HTMLButtonElement
+        ).disabled,
+        "the final provider cannot be deleted",
+      );
+
+      stage = "restrict API reasoning choices without a network request";
+      const currentAgentKind = control(win!, "agentKind") as HTMLSelectElement;
+      currentAgentKind.value = "openai-compatible";
+      protocolSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+      const effortSelect = control(
+        win!,
+        "agentReasoningEffort",
+      ) as HTMLSelectElement;
+      assert.isFalse(
+        (effortSelect.closest("label") as HTMLElement).hidden,
+        "API reasoning effort is visible",
+      );
+      for (const value of ["xhigh", "max"]) {
+        const option = effortSelect.querySelector(
+          'option[value="' + value + '"]',
+        ) as HTMLOptionElement;
+        assert.isTrue(option.disabled, value + " is disabled for API profiles");
+        assert.isTrue(option.hidden, value + " is hidden for API profiles");
+      }
+      currentAgentKind.value = "claude-code";
+      protocolSelect.dispatchEvent(new win!.Event("change", { bubbles: true }));
+
       const workspace = await repository.loadWorkspace();
       originalWorkspace = JSON.parse(
         JSON.stringify(workspace),

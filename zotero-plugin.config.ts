@@ -65,6 +65,10 @@ export default defineConfig({
         Boolean(pdfTranslateTestXpi),
       "extensions.zotero-research-database.test.externalAgentEnabled":
         process.env.ZRDB_TEST_EXTERNAL_AGENT === "1",
+      "extensions.zotero-research-database.test.liveAgentFixture":
+        process.env.ZRDB_TEST_LIVE_AGENT_FIXTURE || "",
+      "extensions.zotero-research-database.test.liveCodexEnabled":
+        process.env.ZRDB_TEST_LIVE_CODEX === "1",
     },
     hooks: {
       "test:bundleTests": async () => {

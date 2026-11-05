@@ -1,10 +1,13 @@
 import {
   access,
+  copyFile,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -46,6 +49,17 @@ export async function createStorageRuntime() {
       await writeFile(path, content, "utf8");
       return content.length;
     },
+    write: async (path: string, bytes: Uint8Array) => {
+      await writeFile(path, bytes);
+      return bytes.byteLength;
+    },
+    copy: (sourcePath: string, destinationPath: string) =>
+      copyFile(sourcePath, destinationPath),
+    getChildren: async (path: string) =>
+      (await readdir(path)).map((name) => join(path, name)),
+    stat: async (path: string) => ({
+      type: (await stat(path)).isDirectory() ? "directory" : "regular",
+    }),
     makeDirectory: async (path: string) => {
       await mkdir(path, { recursive: true });
     },

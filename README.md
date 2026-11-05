@@ -1,6 +1,6 @@
 # 用途
 
-Zotero Research Database 为 Zotero 9 增加同一文献管理区域内的数据库表格视图，并用一个按钮在“Zotero 默认列表”和“数据库表格”之间切换。它直接读取当前 Zotero 集合、保存搜索、标签筛选和搜索结果，不复制标题、作者、PDF，也不建立第二套文献库。
+Zotero Research Database 为 Zotero 9/10 增加同一文献管理区域内的数据库表格视图，并用一个按钮在“Zotero 默认列表”和“数据库表格”之间切换。它直接读取当前 Zotero 集合、保存搜索、标签筛选和搜索结果，不复制标题、作者、PDF，也不建立第二套文献库。
 
 表格是 Zotero 条目的动态投影：原生书目字段直接来自条目元数据，自定义研究属性、锁定状态和内部 manifest 保存在 Zotero 配置目录下的插件本机数据文件中。研究属性同时通过 Zotero 9 的 `ItemPaneManager.registerInfoRow()` 注册到原生“信息”面板；插件不使用 Markdown 充当数据库、不建立第二套书目库，也不直接修改 `zotero.sqlite`。
 
@@ -21,15 +21,15 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 - 默认的研究问题、研究意义、研究价值、主要成果和中文标题会注册为 Zotero 原生“信息”面板属性行，与数据库表格读写同一份数据；字段重命名、增添、归档和恢复会同步更新原生属性行，不再把所有内容堆进“其他”。
 - 个人库共享一套自定义属性字典；保存视图只记录显示字段、筛选、排序、分组和布局。
 - 支持短文本、长文本、单选、多选、数值、日期、勾选、评分和 URL 字段。
-- 默认提供研究问题、研究意义、研究价值、主要成果和中文标题五个研究属性；字段名、说明、提取说明和输出语言均可修改。
+- 默认提供研究问题、研究意义、研究价值、主要成果和中文标题五个研究属性；字段设置保留标题、显隐和 Agent 提示词，自定义字段可归档后恢复。
 - 长文本研究属性在表格中使用显示层段落、编号、项目符号和短标签排版；JSON/Markdown 包装会转换为简洁的可读块。编辑器、复制和本机记录仍保留原始文字，显示整理不会反写数据。
 - 人工编辑后自动锁定；批量 Agent 提取不会覆盖锁定值，单元格上的“重新生成”按钮可用于显式覆盖当前字段。
-- Zotero 设置中提供本插件页面，可调整默认视图、默认行高、密度、圆角、阴影与动效，并管理自定义字段的名称、类型、说明、提示词、归档和恢复；界面明暗自动跟随 Zotero，不提供独立切换或覆盖设置。
+- Zotero 设置中提供本插件页面，可调整默认视图、默认行高、密度、圆角、阴影与动效，并统一管理原生列和自定义字段；界面明暗自动跟随 Zotero，不提供独立切换或覆盖设置。
 - “字段与工具”二级菜单保留“Agent、MinerU 与主 PDF”综合入口，并增加“MinerU 转换”快捷入口；快捷入口直接打开综合页面的 MinerU 标签，不新增顶栏按钮。统一页面支持 Codex CLI、Claude Code、本地 Ollama、OpenAI 兼容 API 和直接启动的自定义 JSON Agent；自定义进程只使用标准输入/输出，不经过 Shell。
 - 每次提取会重新读取本机 Agent 设置，不再沿用数据库视图首次打开时的旧配置。参与提取且未被人工锁定的属性格会显示 Apple 风格细圆环，并依次提示读取全文、Agent 处理和保存阶段；成功短暂显示对勾，失败保留警示圆环，悬停可查看完整原因。
-- 完整原文仍用于输入哈希和审计；超过 `20,000` 字符时，实际 Agent 输入改为摘要/引言、方法、结果、讨论、结论、正文中段和文末等重点片段。Codex 提取固定使用 `low` 推理，配置的模型名与超时会真实传入进程；旧版 `120000ms` 默认超时会一次性迁移为 `900000ms`。
-- MinerU 只保留官方网页 API 和 Docker/self-hosted API 两种模式，不再提供 MinerU Desktop/客户端模式。Docker 模式在本机服务未运行时可自动启动 Docker Desktop 与 `E:\software\DockerProject\MinerU` 的 `mineru-api` Compose 服务，并同时兼容 MinerU 4.x（v1 接口 + 质量档）与 3.x（`/file_parse`）服务。两种模式都会把结果作为 `【MinerU原文】<PDF名称>.md` 存储型附件放到对应条目下，图表写入论文图表 manifest，重复结果按角色与 SHA-256 去重。设置中的“在 Zotero 原生列表隐藏 MinerU 产物”默认勾选，只在本机视图隐藏插件 manifest 标记的 Markdown/图表子附件；取消勾选立即恢复显示，不删除附件或改变同步数据。
-- Research Database 与 Bilingual Reader 可共用设置中的 MinerU 共享产物目录，默认是 `E:\software\Zotero\mineru-shared-store`。产物按 PDF SHA-256 保存，并建立 Zotero 附件索引；转换时优先复用已有 Zotero Markdown 附件和完整共享缓存，同一 PDF 的并发任务通过跨插件文件锁避免重复解析。可选择优先导入 llm-for-zotero 的已有缓存。勾选“重新解析并生成新产物”才会绕过复用并重新调用所选 API：新产物先在暂存目录校验，再覆盖共享缓存，失败时恢复旧版本；Zotero 旧附件保留为历史，新附件成为当前版本。
+- 完整原文仍用于输入哈希和审计；超过 `20,000` 字符时，实际 Agent 输入改为摘要/引言、方法、结果、讨论、结论、正文中段和文末等重点片段。Codex 与 Claude Code 的模型、思考强度和超时会按当前供应商设置传入进程；旧版 `120000ms` 默认超时会一次性迁移为 `900000ms`。
+- MinerU 只保留官方网页 API 和 Docker/self-hosted API 两种模式，不再提供 MinerU Desktop/客户端模式。Docker 模式在本机服务未运行时可自动启动 Docker Desktop 与用户配置的 `mineru-api` Compose 服务；Docker CLI、Docker Desktop、Compose 项目目录和共享产物目录均支持自动检测或手动填写，安装包不携带开发机路径。插件同时兼容 MinerU 4.x（v1 接口 + 质量档）与 3.x（`/file_parse`）服务。两种模式都会把结果作为 `【MinerU原文】<PDF名称>.md` 存储型附件放到对应条目下，图表写入论文图表 manifest，重复结果按角色与 SHA-256 去重。设置中的“在 Zotero 原生列表隐藏 MinerU 产物”默认勾选，只在本机视图隐藏插件 manifest 标记的 Markdown/图表子附件；取消勾选立即恢复显示，不删除附件或改变同步数据。
+- Research Database 与 Bilingual Reader 可共用设置中的 MinerU 共享产物目录；未填写时跟随研究数据库目录，也可以指定已有共享目录。产物按 PDF SHA-256 保存，并建立 Zotero 附件索引；转换时优先复用已有 Zotero Markdown 附件和完整共享缓存，同一 PDF 的并发任务通过跨插件文件锁避免重复解析。可选择优先导入 llm-for-zotero 的已有缓存。勾选“重新解析并生成新产物”才会绕过复用并重新调用所选 API：新产物先在暂存目录校验，再覆盖共享缓存，失败时恢复旧版本；Zotero 旧附件保留为历史，新附件成为当前版本。
 - 每篇条目可在统一外部工具页面显式指定主 PDF，选择结果写入该条目的内部同步记录，不改名、不移动也不修改 PDF。未指定时按“附件标题恰好为 `PDF` → Zotero 最佳附件 → 第一个 PDF”的顺序自动选择；首页预览、MinerU 转换和 PDF 全文回退使用同一附件。
 - 内容优先读取 Zotero 条目下的 `【MinerU原文】*.md`，缺失时回退到主 PDF 的 Zotero 本地全文。
 - 支持动态比较、固定快照、调用外部 Agent 生成综合结论，以及 CSV、XLSX、HTML 和系统打印 PDF 导出。
@@ -66,24 +66,23 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 - 不直接读取或修改 `zotero.sqlite`，也不创建插件私有的第二套书目数据库。
 - 系统条目在 Zotero 原生列表中可见，在插件数据库表格中自动排除。
 - Codex 身份验证与模型选择由 Codex 自己管理，Ollama 只连接用户明确配置的本机端点。OpenAI 兼容 API 与 MinerU 的凭据仅保存在本机 Zotero 偏好中，不进入便携设置或备份。
-- Codex 单次结构化任务沿用已有登录和 provider，可使用设置页指定的模型，固定使用 `low` 推理，并禁用插件、浏览器、电脑控制、多 Agent、Hook 与 Shell 工具；读取 PDF 时只临时开放主 PDF 工作目录的只读访问。
+- Codex 单次结构化任务沿用已有登录和 provider，可使用设置页指定的模型和思考强度，并禁用插件、浏览器、电脑控制、多 Agent、Hook 与 Shell 工具；读取 PDF 时只临时开放主 PDF 工作目录的只读访问。
 - 外部 Agent 返回值必须通过插件生成的 JSON Schema；进程失败、超时、取消或结果非法时不会写入研究属性。
 - 自定义 Agent 必须配置明确的可执行文件和 JSON 参数数组；插件直接创建进程，不接受任意 Shell 命令模板。
 - MinerU 官方网页 API Token 可直接保存在本机 Zotero 偏好中，也可从用户指定的环境变量读取（默认 `MINERU_API_TOKEN`），不会进入便携设置、备份或同步数据；本地部署地址只接受 localhost、回环或私有局域网地址。自动启动只允许回环地址，直接运行文件名受限的 `docker.exe` / `Docker Desktop.exe`，Compose 参数固定为 `api` profile、`mineru-api` 和 `--no-build`，不经过 Shell 或用户命令模板。
 - 第一版不支持群组库、公式字段、关系字段、OCR 和证据引用。
 - Zotero DOM 结构不兼容时，自定义视图停止注入并保留默认列表。
 
-# 本机 Docker MinerU
+# Docker MinerU（可选的本地部署）
 
-- 部署目录：`E:\software\DockerProject\MinerU`。
+- 在插件设置中填写包含 `compose.yaml` 的 MinerU 项目目录；不同电脑的目录可以不同。
 - 当前镜像：`mineru:4.0.2-vllm0.21.0`，包含 MinerU `4.0.2`、vLLM `0.21.0` 和 PyTorch `2.11.0+cu130`。
 - API 只绑定 `127.0.0.1:8000`，插件的“本地部署”地址填写 `http://127.0.0.1:8000`。
 - 启动命令：`docker compose --profile api up -d --no-build mineru-api`；状态与日志分别使用 `docker compose --profile api ps` 和 `docker compose --profile api logs --tail 200 mineru-api` 检查。
 - 启动命令需要镜像已存在（首次先 `docker compose --profile api build`）；插件以 `--no-build` 启动，不会在转换时触发构建。
 - 健康检查先请求 `/v1/health`（MinerU 4.x），404 时回退 `/health`（3.x）；服务不可用时先启动 Docker Desktop，再以固定参数启动上述 Compose 服务并等待健康状态。
 - 转换优先走 MinerU 4.x 的 v1 接口：`POST /v1/uploads` 建上传 → `PUT .../content` 传字节 → `POST .../complete` 取 `file_id` → `POST /v1/parse/jobs` 建任务（带 `tier`）→ 轮询 `GET /v1/parse/jobs/{id}` → `GET /v1/files/{file_id}/content` 下载结果 ZIP。端点对 `/v1/uploads` 明确返回 404/405 时才回退到 3.x 的同步 `/file_parse` ZIP 协议，再回退 `/tasks` 队列协议。
-- 2026-08-04 已确认容器健康、RTX 4060 Laptop GPU 可见，并核对 `/tasks`、`/tasks/{id}`、`/tasks/{id}/result` 与 ZIP 结果协议；随后使用正式 Zotero 条目 `A8FHXTDH` 的主 PDF 完成端到端转换，约 25 秒生成 54,263 字符 Markdown 和 14 张带页码、坐标的图表。
-- 2026-08-15 再用正式条目 `X9QP2AAG`《空气激光的原理、产生及应用》完成插件内 Docker 自动启动、PDF 上传、Markdown/12 个图表解析、Zotero 导入和重复运行去重闭环。相同 Docker 结果再次转换时附件键没有增加。
+- 已在隔离 Zotero Profile 中验证容器健康、上传、Markdown/图表解析、Zotero 导入和重复运行去重；不同电脑需要按本机 Docker 和 MinerU 项目位置配置。
 
 # 开发与验证
 
@@ -91,7 +90,7 @@ https://github.com/user-attachments/assets/6557ee54-17b8-49a1-94cf-07163140a8eb
 npm install
 npm run lint:check
 npm run test:unit
-$env:ZOTERO_PLUGIN_ZOTERO_BIN_PATH='E:\software\Zotero\Zotero\zotero.exe'
+$env:ZOTERO_PLUGIN_ZOTERO_BIN_PATH='C:\path\to\zotero.exe'
 $env:ZOTERO_PDF_TRANSLATE_XPI_PATH='C:\path\to\zoteropdftranslate@euclpts.com.xpi'
 npm test -- --no-watch --abort-on-fail --exit-on-finish
 npm run build
@@ -102,8 +101,8 @@ npm run build
 2026-11-02 当前验证结果：
 
 - `npm run lint:check`、`npx tsc --noEmit` 与 `git diff --check` 通过。
-- `npm run test:unit`：214 项通过，覆盖 MinerU 共享缓存、OpenAI 兼容 Agent、设置持久化、公式渲染、记录更新与有界缓存。
-- Zotero 10.0.7 隔离运行测试：24 项通过，覆盖原生列表/数据库视图切换、MinerU 产物隐藏/恢复、PDF 缩略图、列宽拖动、集合刷新和记录/产物刷新隔离；未配置的外部服务连通测试保持跳过。
+- `npm run test:unit`：261 项通过，覆盖 MinerU 共享缓存、OpenAI 兼容 Agent、设置持久化、公式渲染、记录更新与有界缓存。
+- Zotero 10 隔离运行测试：27 项通过，覆盖原生列表/数据库视图切换、MinerU 产物隐藏/恢复、PDF 缩略图、列宽拖动、集合刷新和记录/产物刷新隔离；未配置的外部服务连通测试保持跳过。
 - `0.3.39` 生产 XPI：`release/zotero-research-database.xpi`，`899,708` 字节，SHA-256 `7A9C4EB1ED58ECDA4285C8ABEAED2D8F666ADA77A1805767BF4AAF5497D69363`。
 - 尚未做两个已登录配置之间的真实云同步往返；超大集合首次打开和整份 JSON 原子重写仍是后续性能优化重点。
 
@@ -112,7 +111,7 @@ npm run build
 不要把 XPI 直接复制到 Profile 的 `extensions` 目录。请在 Zotero 中打开“工具 → 附加组件”，从齿轮菜单选择“Install Add-on From File…”，然后选择：
 
 ```text
-D:\Postgraduate_JilinUniversity\03_Sundries\02_DevLab\20260815-zotero-research-database\release\zotero-research-database.xpi
+<repository-root>\release\zotero-research-database.xpi
 ```
 
 安装后应在附加组件管理器中看到版本 `0.3.39`。如果 Zotero 要求重启，请先保存当前工作再重启；Zotero 原生文献工具栏左侧红框位置随后会出现一个默认列表/数据库表格切换图标。请勿强杀正在运行的 Zotero；正常关闭后再覆盖安装本版。

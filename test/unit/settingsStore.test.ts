@@ -127,11 +127,14 @@ describe("portable settings persistence", function () {
   it("excludes local credentials and the bootstrap pointer when loading, reading and writing", async function () {
     prefs.set(prefKey("artifactImportToken"), "local-secret");
     prefs.set(prefKey("agentApiKey"), "local-api-key");
+    prefs.set(prefKey("agentProviders"), "local-provider-list");
     prefs.set(prefKey("mineruOfficialToken"), "local-mineru-token");
     await seedSettings({
       agentModel: "old",
       artifactImportToken: "copied-secret",
       agentApiKey: "copied-api-key",
+      agentProtocol: "chat-completions",
+      agentProviders: "copied-provider-list",
       mineruOfficialToken: "copied-mineru-token",
       dataRoot: "wrong-root",
       unknown: "unknown",
@@ -141,16 +144,25 @@ describe("portable settings persistence", function () {
     expect(getPref("dataRoot")).to.equal(root);
     expect(getPortableSetting("artifactImportToken")).to.equal(undefined);
     expect(getPortableSetting("agentApiKey")).to.equal(undefined);
+    expect(getPortableSetting("agentProviders")).to.equal(undefined);
+    expect(getPref("agentProviders")).to.equal("local-provider-list");
+    expect(getPref("agentProtocol")).to.equal("chat-completions");
     expect(getPortableSetting("mineruOfficialToken")).to.equal(undefined);
     setPref("artifactImportToken", "rotated-secret");
     setPref("agentApiKey", "rotated-api-key");
+    setPref("agentProviders", "rotated-provider-list");
+    setPref("agentProtocol", "responses");
     setPref("mineruOfficialToken", "rotated-mineru-token");
     setPref("dataRoot", root);
     setPref("agentModel", "new");
     await flushPortableSettings();
-    expect((await readSettings()).values).to.deep.equal({ agentModel: "new" });
+    expect((await readSettings()).values).to.deep.equal({
+      agentModel: "new",
+      agentProtocol: "responses",
+    });
     expect(getPref("artifactImportToken")).to.equal("rotated-secret");
     expect(getPref("agentApiKey")).to.equal("rotated-api-key");
+    expect(getPref("agentProviders")).to.equal("rotated-provider-list");
     expect(getPref("mineruOfficialToken")).to.equal("rotated-mineru-token");
   });
 

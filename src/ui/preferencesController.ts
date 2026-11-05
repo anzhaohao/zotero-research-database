@@ -1,4 +1,8 @@
 import {
+  pendingDirectoryMigration,
+  scheduleDirectoryMigration,
+} from "../storage/directoryMigration";
+import {
   createDefaultLayout,
   createID,
   TRANSLATED_TITLE_FIELD_ID,
@@ -16,9 +20,14 @@ import {
   type AgentProfile,
 } from "../services/externalAgent";
 import {
-  AGENT_PRESETS,
   getAgentModelPresets,
   parseAgentProfile,
+  activeAgentProviderID,
+  readAgentProviders,
+  deleteAgentProvider,
+  saveActiveAgentProvider,
+  switchAgentProvider,
+  type SavedAgentProvider,
 } from "../services/agentSettings";
 import {
   readLocalCodexModelCatalog,
@@ -30,7 +39,7 @@ import {
 } from "../services/mineru";
 import { ResearchRepository } from "../storage/repository";
 import { getPref, setPref } from "../utils/prefs";
-import { getDataRoot, setDataRoot } from "../storage/dataRoot";
+import { getDataRoot } from "../storage/dataRoot";
 import {
   flushPortableSettings,
   initializePortableSettings,
@@ -43,6 +52,7 @@ import {
   relocateArtifactStorageRoot,
   scanBrokenArtifactLinks,
   setArtifactStorageRoot,
+  normalizeStorageRoot,
 } from "../services/artifactStorage";
 import {
   ensureArtifactImportToken,
@@ -76,6 +86,7 @@ const prefKeys = [
   "agentApiKey",
   "agentModel",
   "agentReasoningEffort",
+  "agentProtocol",
   "agentTimeoutMs",
   "mineruMode",
   "mineruSharedStoreDirectory",
@@ -125,6 +136,9 @@ export class PreferencesController {
   private savingLocalSettings = false;
   private agentTesting = false;
   private agentModelRequestId = 0;
+  private agentProviderID = "";
+  private agentProviderBusy = false;
+  private pendingAgentProviderID = "";
 
   constructor(private win: Window) {}
 
@@ -137,7 +151,9 @@ export class PreferencesController {
     root.dataset.zrdbBound = "1";
     this.bindTabBar();
     this.loadLocalControls();
+    this.loadAgentProviderControls();
     this.bindLocalControls();
+    this.bindAgentProviderControls();
     this.bindAgentTests();
     this.bindAgentModelPicker();
     this.bindArtifactImportToken();
@@ -195,7 +211,11 @@ export class PreferencesController {
       const control = this.root.querySelector(`[data-pref="${key}"]`) as
         HTMLInputElement | HTMLSelectElement | null;
       if (!control) continue;
-      const value = getPref(key);
+      const pending = pendingDirectoryMigration();
+      const value =
+        pending && key in pending.preferences
+          ? pending.preferences[key as keyof typeof pending.preferences]
+          : getPref(key);
       if (isCheckboxControl(control)) control.checked = Boolean(value);
       else
         control.value =
@@ -252,14 +272,39 @@ export class PreferencesController {
     try {
       this.profileFromControls();
       const mineruProfile = this.mineruProfileFromControls();
+      this.saveCurrentAgentProvider();
       // Initialization is cached; do not reload the file over unsaved edits.
       await initializePortableSettings();
       const requestedRoot = String(
         inputValue(this.root, "dataRoot") || "",
       ).trim();
       const previousRoot = String(getPref("dataRoot") || "").trim();
+      const sourceArtifactRoot = getArtifactStorageRoot();
+      const sourceSharedRoot = parseMinerUProfile({
+        ...this.mineruProfileFromControls(),
+        sharedStoreDirectory: getPref("mineruSharedStoreDirectory"),
+      }).sharedStoreDirectory;
+      const requestedArtifactRoot = normalizeStorageRoot(
+        String(inputValue(this.root, "artifactStorageRoot") || ""),
+      );
+      const requestedSharedRoot = normalizeStorageRoot(
+        String(inputValue(this.root, "mineruSharedStoreDirectory") || ""),
+      );
+      const directoriesChanged =
+        requestedRoot !== previousRoot ||
+        requestedArtifactRoot !==
+          String(getPref("artifactStorageRoot") || "").trim() ||
+        requestedSharedRoot !==
+          String(getPref("mineruSharedStoreDirectory") || "").trim();
       for (const key of prefKeys) {
-        if (key === "dataRoot") continue;
+        if (
+          [
+            "dataRoot",
+            "artifactStorageRoot",
+            "mineruSharedStoreDirectory",
+          ].includes(key)
+        )
+          continue;
         const raw =
           key === "mineruOfficialEndpoint"
             ? mineruProfile.officialEndpoint
@@ -276,15 +321,21 @@ export class PreferencesController {
         setPref(key, value as never);
       }
       await flushPortableSettings();
-      if (requestedRoot !== previousRoot) setDataRoot(requestedRoot);
+      scheduleDirectoryMigration({
+        dataRoot: requestedRoot,
+        artifactStorageRoot: requestedArtifactRoot,
+        mineruSharedStoreDirectory: requestedSharedRoot,
+        sourceArtifactRoot,
+        sourceSharedRoot,
+      });
       const officialEndpointControl = this.root.querySelector<HTMLInputElement>(
         '[data-pref="mineruOfficialEndpoint"]',
       );
       if (officialEndpointControl)
         officialEndpointControl.value = mineruProfile.officialEndpoint;
       this.status(
-        requestedRoot !== previousRoot
-          ? "已保存本机设置；研究数据库目录将在重启 Zotero 后切换"
+        directoriesChanged
+          ? "已保存目录迁移计划；重启 Zotero 时复制并校验，成功后自动切换；原文件保留"
           : "已保存本机设置",
       );
       if (this.root.querySelector('[data-pref-tab="agent"].is-active'))
@@ -294,6 +345,200 @@ export class PreferencesController {
     } finally {
       this.savingLocalSettings = false;
       if (button) button.disabled = false;
+    }
+  }
+
+  private loadAgentProviderControls(): void {
+    try {
+      const providers = readAgentProviders();
+      const selectedID = activeAgentProviderID();
+      this.renderAgentProviders(providers, selectedID);
+      const selected =
+        providers.find((provider) => provider.id === selectedID) ||
+        providers[0];
+      this.applyAgentProfileToControls(selected);
+    } catch (error) {
+      // Do not overwrite a damaged provider list with the legacy fallback.
+      this.status(error instanceof Error ? error.message : String(error));
+      const select = this.root?.querySelector<HTMLSelectElement>(
+        "#zrdb-agent-provider-select",
+      );
+      if (select) select.disabled = true;
+    }
+  }
+
+  private renderAgentProviders(
+    providers: SavedAgentProvider[],
+    selectedID: string,
+  ): void {
+    const select = this.root?.querySelector<HTMLSelectElement>(
+      "#zrdb-agent-provider-select",
+    );
+    if (!select) return;
+    select.replaceChildren(
+      ...providers.map((provider) => {
+        const option = this.win.document.createElement("option");
+        option.value = provider.id;
+        option.textContent = provider.name;
+        option.label = provider.name;
+        return option;
+      }),
+    );
+    select.disabled = false;
+    select.value = selectedID;
+    this.agentProviderID = selectedID;
+    const remove = this.root?.querySelector<HTMLButtonElement>(
+      "#zrdb-agent-provider-delete",
+    );
+    if (remove) remove.disabled = providers.length <= 1;
+  }
+
+  private applyAgentProfileToControls(profile: AgentProfile): void {
+    if (!this.root) return;
+    const values = {
+      agentKind: profile.kind,
+      agentExecutable: profile.executable || "",
+      agentArgs: JSON.stringify(profile.args || []),
+      agentEndpoint: profile.endpoint || "",
+      agentApiKey: profile.apiKey || "",
+      agentModel: profile.model || "",
+      agentReasoningEffort: profile.reasoningEffort || "",
+      agentProtocol: profile.apiProtocol || "chat-completions",
+      agentTimeoutMs: String(profile.timeoutMs),
+    };
+    for (const [key, value] of Object.entries(values)) {
+      const control = this.root.querySelector<
+        HTMLInputElement | HTMLSelectElement
+      >(`[data-pref="${key}"]`);
+      if (control) control.value = value;
+    }
+  }
+
+  private saveCurrentAgentProvider(): SavedAgentProvider {
+    const providers = readAgentProviders();
+    const id = this.agentProviderID || activeAgentProviderID();
+    const current = providers.find((provider) => provider.id === id);
+    if (!current) throw new Error("找不到当前供应商，请重新打开设置页面");
+    const provider = {
+      ...this.profileFromControls(),
+      id: current.id,
+      name: current.name,
+    };
+    saveActiveAgentProvider(provider, providers);
+    return provider;
+  }
+
+  private bindAgentProviderControls(): void {
+    this.root
+      ?.querySelector<HTMLSelectElement>("#zrdb-agent-provider-select")
+      ?.addEventListener("change", (event) => {
+        const targetID = (event.currentTarget as HTMLSelectElement).value;
+        void this.changeAgentProvider(targetID);
+      });
+    this.root
+      ?.querySelector("#zrdb-agent-provider-save")
+      ?.addEventListener("click", () => {
+        void this.createAgentProvider();
+      });
+    this.root
+      ?.querySelector("#zrdb-agent-provider-delete")
+      ?.addEventListener("click", () => {
+        void this.removeAgentProvider();
+      });
+  }
+
+  private async changeAgentProvider(targetID: string): Promise<void> {
+    if (this.agentProviderBusy) {
+      // Keep the latest selection instead of dropping a rapid provider switch.
+      this.pendingAgentProviderID = targetID;
+      return;
+    }
+    if (targetID === this.agentProviderID) return;
+    this.agentProviderBusy = true;
+    try {
+      this.saveCurrentAgentProvider();
+      const provider = switchAgentProvider(targetID);
+      this.renderAgentProviders(readAgentProviders(), provider.id);
+      this.applyAgentProfileToControls(provider);
+      this.updateModeVisibility();
+      await flushPortableSettings();
+      this.status(`已切换到供应商：${provider.name}`);
+      void this.refreshAgentModelOptions();
+    } catch (error) {
+      try {
+        this.renderAgentProviders(
+          readAgentProviders(),
+          activeAgentProviderID(),
+        );
+      } catch {
+        // Preserve the original error when the stored list itself is damaged.
+      }
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.agentProviderBusy = false;
+      const pendingTargetID = this.pendingAgentProviderID;
+      this.pendingAgentProviderID = "";
+      if (pendingTargetID && pendingTargetID !== this.agentProviderID)
+        void this.changeAgentProvider(pendingTargetID);
+    }
+  }
+
+  private async createAgentProvider(): Promise<void> {
+    if (this.agentProviderBusy || !this.root) return;
+    let suggestedName: string;
+    try {
+      suggestedName = `供应商 ${readAgentProviders().length + 1}`;
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const enteredName = this.win.prompt(
+      "新供应商名称（将复制当前模型、接口和思考强度设置）",
+      suggestedName,
+    );
+    if (enteredName === null) return;
+    const name = enteredName.trim();
+    if (!name) {
+      this.status("供应商名称不能为空");
+      return;
+    }
+    this.agentProviderBusy = true;
+    try {
+      const provider = {
+        ...this.profileFromControls(),
+        id: createID("agent-provider"),
+        name,
+      };
+      saveActiveAgentProvider(provider);
+      const providers = readAgentProviders();
+      this.renderAgentProviders(providers, provider.id);
+      this.applyAgentProfileToControls(provider);
+      this.updateModeVisibility();
+      await flushPortableSettings();
+      this.status(`已新建并切换到供应商：${provider.name}`);
+      void this.refreshAgentModelOptions();
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.agentProviderBusy = false;
+    }
+  }
+
+  private async removeAgentProvider(): Promise<void> {
+    if (this.agentProviderBusy) return;
+    this.agentProviderBusy = true;
+    try {
+      const provider = deleteAgentProvider(this.agentProviderID);
+      this.renderAgentProviders(readAgentProviders(), provider.id);
+      this.applyAgentProfileToControls(provider);
+      this.updateModeVisibility();
+      await flushPortableSettings();
+      this.status(`已删除供应商，并切换到：${provider.name}`);
+      void this.refreshAgentModelOptions();
+    } catch (error) {
+      this.status(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.agentProviderBusy = false;
     }
   }
 
@@ -350,7 +595,7 @@ export class PreferencesController {
         this.status("已取消选择产物根目录");
         return;
       }
-      const root = setArtifactStorageRoot(path);
+      const root = normalizeStorageRoot(path);
       const input = this.root?.querySelector<HTMLInputElement>(
         '[data-pref="artifactStorageRoot"]',
       );
@@ -463,16 +708,13 @@ export class PreferencesController {
     );
     agentKind?.addEventListener("change", () => {
       const kind = agentKind.value;
-      if (kind === "claude-code") {
-        const preset = AGENT_PRESETS[kind];
+      if (kind === "codex-cli" || kind === "claude-code") {
         const executable = this.root?.querySelector<HTMLInputElement>(
           '[data-pref="agentExecutable"]',
         );
-        const endpoint = this.root?.querySelector<HTMLInputElement>(
-          '[data-pref="agentEndpoint"]',
-        );
-        if (executable) executable.value = preset.executable || "";
-        if (endpoint) endpoint.value = preset.endpoint || "";
+        // A path for one CLI cannot be reused for the other. Blank means that
+        // the bridge will discover the selected CLI on this computer.
+        if (executable) executable.value = "";
       }
       if (kind === "ollama" || kind === "openai-compatible") {
         const endpoint = this.root?.querySelector<HTMLInputElement>(
@@ -489,6 +731,9 @@ export class PreferencesController {
     });
     this.root
       ?.querySelector('[data-pref="mineruMode"]')
+      ?.addEventListener("change", () => this.updateModeVisibility());
+    this.root
+      ?.querySelector('[data-pref="agentProtocol"]')
       ?.addEventListener("change", () => this.updateModeVisibility());
   }
 
@@ -543,6 +788,7 @@ export class PreferencesController {
     const kind = String(
       inputValue(this.root, "agentKind"),
     ) as AgentProfile["kind"];
+    const providerID = this.agentProviderID;
     const requestId = ++this.agentModelRequestId;
     if (resetModel) input.value = "";
     const presets = [...getAgentModelPresets(kind)];
@@ -598,6 +844,7 @@ export class PreferencesController {
       }));
       if (
         requestId !== this.agentModelRequestId ||
+        this.agentProviderID !== providerID ||
         String(inputValue(this.root, "agentKind")) !== kind
       )
         return;
@@ -656,6 +903,7 @@ export class PreferencesController {
     }
     if (
       requestId !== this.agentModelRequestId ||
+      this.agentProviderID !== providerID ||
       String(inputValue(this.root, "agentKind")) !== kind
     )
       return;
@@ -685,6 +933,19 @@ export class PreferencesController {
       '[data-pref="agentEndpoint"]',
     );
     const openAICompatible = agentKind === "openai-compatible";
+    const effort = this.root.querySelector<HTMLSelectElement>(
+      '[data-pref="agentReasoningEffort"]',
+    );
+    if (effort) {
+      for (const option of Array.from(effort.options) as HTMLOptionElement[]) {
+        const apiUnsupported = ["xhigh", "max"].includes(option.value);
+        option.hidden = openAICompatible && apiUnsupported;
+        option.disabled = openAICompatible && apiUnsupported;
+      }
+      const selected = effort.selectedOptions[0] as
+        HTMLOptionElement | undefined;
+      if (selected?.disabled) effort.value = "";
+    }
     if (endpointLabel)
       endpointLabel.textContent = openAICompatible
         ? "API 地址（Base URL）"
@@ -781,6 +1042,7 @@ export class PreferencesController {
       apiKey: inputValue(this.root, "agentApiKey"),
       model: inputValue(this.root, "agentModel"),
       reasoningEffort: inputValue(this.root, "agentReasoningEffort"),
+      apiProtocol: inputValue(this.root, "agentProtocol"),
       timeoutMs: inputValue(this.root, "agentTimeoutMs"),
     });
   }

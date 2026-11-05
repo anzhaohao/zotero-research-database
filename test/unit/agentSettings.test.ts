@@ -1,10 +1,65 @@
 import { expect } from "chai";
 import {
+  activeAgentProviderID,
+  deleteAgentProvider,
   getAgentModelPresets,
   parseAgentProfile,
+  readActiveAgentProvider,
+  readAgentProfile,
+  readAgentProviders,
+  saveActiveAgentProvider,
+  switchAgentProvider,
+  type SavedAgentProvider,
 } from "../../src/services/agentSettings";
 
+const previousZotero = (globalThis as any).Zotero;
+
 describe("external Agent settings", function () {
+  let prefs: Map<string, string | number | boolean>;
+
+  beforeEach(function () {
+    prefs = new Map();
+    (globalThis as any).Zotero = {
+      Prefs: {
+        get: (key: string) => prefs.get(key),
+        set: (key: string, value: string | number | boolean) => {
+          prefs.set(key, value);
+          return true;
+        },
+      },
+    };
+  });
+
+  afterEach(function () {
+    (globalThis as any).Zotero = previousZotero;
+  });
+
+  function setRawPref(key: string, value: string | number | boolean): void {
+    prefs.set(`extensions.zotero.zoteroResearchDatabase.${key}`, value);
+  }
+
+  function provider(
+    id: string,
+    name: string,
+    model: string,
+  ): SavedAgentProvider {
+    return {
+      id,
+      name,
+      ...parseAgentProfile({
+        kind: "openai-compatible",
+        executable: "",
+        args: "[]",
+        endpoint: `https://${id}.example.com/v1`,
+        apiKey: `${id}-secret`,
+        model,
+        reasoningEffort: "medium",
+        apiProtocol: "responses",
+        timeoutMs: 30000,
+      }),
+    };
+  }
+
   it("parses a direct JSON process without constructing a shell command", function () {
     expect(
       parseAgentProfile({
@@ -38,7 +93,7 @@ describe("external Agent settings", function () {
     ).to.throw("JSON 字符串数组");
   });
 
-  it("supplies the Claude Code preset and retires Hana settings", function () {
+  it("uses automatic CLI discovery and retires Hana settings", function () {
     const common = {
       executable: "",
       args: "[]",
@@ -47,9 +102,20 @@ describe("external Agent settings", function () {
       timeoutMs: 30000,
     };
     const claude = parseAgentProfile({ ...common, kind: "claude-code" });
-    expect(claude.executable).to.equal(
-      "C:\\Users\\anzhaofeng\\.local\\bin\\claude.exe",
-    );
+    expect(claude.executable).to.equal(undefined);
+    const codex = parseAgentProfile({
+      ...common,
+      kind: "codex-cli",
+      executable: "codex",
+    });
+    expect(codex.executable).to.equal(undefined);
+    expect(
+      parseAgentProfile({
+        ...common,
+        kind: "codex-cli",
+        executable: " /opt/custom/codex ",
+      }).executable,
+    ).to.equal("/opt/custom/codex");
     const hana = parseAgentProfile({ ...common, kind: "hana-agent" });
     expect(hana.kind).to.equal("codex-cli");
   });
@@ -102,5 +168,77 @@ describe("external Agent settings", function () {
       parseAgentProfile({ ...common, reasoningEffort: "ultra" })
         .reasoningEffort,
     ).to.equal(undefined);
+  });
+
+  it("inherits the legacy single provider without discarding its credentials", function () {
+    setRawPref("agentKind", "openai-compatible");
+    setRawPref("agentEndpoint", "https://legacy.example.com/v1");
+    setRawPref("agentApiKey", "legacy-secret");
+    setRawPref("agentModel", "legacy-model");
+    setRawPref("agentProtocol", "responses");
+    setRawPref("agentReasoningEffort", "high");
+    setRawPref("agentTimeoutMs", 45000);
+
+    expect(readAgentProviders()).to.have.length(1);
+    expect(readAgentProfile()).to.include({
+      kind: "openai-compatible",
+      endpoint: "https://legacy.example.com/v1",
+      apiKey: "legacy-secret",
+      model: "legacy-model",
+      apiProtocol: "responses",
+      reasoningEffort: "high",
+      timeoutMs: 45000,
+    });
+    expect(activeAgentProviderID()).to.equal("default");
+  });
+
+  it("saves, switches, updates and deletes providers without losing settings", function () {
+    const first = provider("default", "默认供应商", "model-a");
+    const second = provider("second", "第二个", "model-b");
+    saveActiveAgentProvider(first);
+    saveActiveAgentProvider(second);
+    expect(readAgentProviders().map((entry) => entry.id)).to.deep.equal([
+      "default",
+      "second",
+    ]);
+
+    expect(switchAgentProvider("default").model).to.equal("model-a");
+    saveActiveAgentProvider({ ...first, model: "model-a-new" });
+    expect(readActiveAgentProvider()).to.include({
+      id: "default",
+      model: "model-a-new",
+      apiKey: "default-secret",
+    });
+    expect(
+      readAgentProviders().find((entry) => entry.id === "second"),
+    ).to.include({ model: "model-b", apiKey: "second-secret" });
+
+    expect(deleteAgentProvider("default").id).to.equal("second");
+    expect(activeAgentProviderID()).to.equal("second");
+    expect(readActiveAgentProvider().model).to.equal("model-b");
+    expect(() => deleteAgentProvider("second")).to.throw("至少需要保留一个");
+  });
+
+  it("does not overwrite a damaged provider list with legacy settings", function () {
+    setRawPref("agentProviders", "{not-json");
+    expect(() => readAgentProviders()).to.throw("供应商配置已损坏");
+    expect(() =>
+      saveActiveAgentProvider(provider("new", "新供应商", "m")),
+    ).to.throw("供应商配置已损坏");
+    expect(
+      prefs.get("extensions.zotero.zoteroResearchDatabase.agentProviders"),
+    ).to.equal("{not-json");
+  });
+
+  it("rejects duplicate provider IDs and unknown switches", function () {
+    const first = provider("same", "一", "a");
+    saveActiveAgentProvider(first);
+    expect(() =>
+      saveActiveAgentProvider(provider("new", "二", "b"), [
+        first,
+        provider("same", "重复", "c"),
+      ]),
+    ).to.throw("不能重复");
+    expect(() => switchAgentProvider("missing")).to.throw("找不到所选供应商");
   });
 });

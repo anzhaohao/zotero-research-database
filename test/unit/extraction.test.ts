@@ -88,7 +88,7 @@ describe("external Agent extraction", function () {
         "z".repeat(24_000),
       ].join("");
 
-      const prepared = prepareExtractionText(paper);
+      const prepared = prepareExtractionText(paper, 20_000);
 
       expect(prepared.focused).to.equal(true);
       expect(prepared.originalLength).to.equal(paper.length);
@@ -97,6 +97,113 @@ describe("external Agent extraction", function () {
       expect(prepared.text).to.include(conclusion);
       expect(prepared.text).to.include("[结论]");
     });
+
+    it("sends a normal full paper without dropping methods or results", function () {
+      const paper = "全文".repeat(40_000);
+      expect(prepareExtractionText(paper)).to.deep.equal({
+        text: paper,
+        originalLength: paper.length,
+        focused: false,
+      });
+    });
+  });
+
+  it("creates a fresh Agent bridge for every paper in a batch", async function () {
+    const workspace = createDefaultWorkspace();
+    const repository = {
+      loadRecord: async (item: Zotero.Item) => createEmptyRecord(1, item.key),
+      saveRecord: async () => undefined,
+    } as unknown as ResearchRepository;
+    const agents: AgentBridge[] = [];
+    const inputs: string[] = [];
+    const service = new ExternalAgentExtractionService(
+      repository,
+      () => {
+        const agent = {
+          kind: "codex-cli",
+          cancel() {},
+          probe: async () => ({ executable: "codex", version: "test" }),
+          testStructuredOutput: async () => undefined,
+          extractFields: async (_fields: unknown, input: unknown) => {
+            inputs.push((input as { text: string }).text);
+            return { value: {}, executorVersion: "test" };
+          },
+          synthesizeComparison: async () => ({
+            value: "",
+            executorVersion: "",
+          }),
+        } satisfies AgentBridge;
+        agents.push(agent);
+        return agent;
+      },
+      async (item) => ({
+        type: "pdf-fulltext",
+        text: `paper ${item.key}`,
+        hash: `hash-${item.key}`,
+        attachmentID: 2,
+      }),
+    );
+
+    await service.run(
+      [{ key: "ITEM0007" } as Zotero.Item, { key: "ITEM0008" } as Zotero.Item],
+      workspace,
+      () => undefined,
+    );
+
+    expect(agents).to.have.length(2);
+    expect(agents[0]).not.to.equal(agents[1]);
+    expect(inputs).to.deep.equal(["paper ITEM0007", "paper ITEM0008"]);
+  });
+
+  it("cancels the active paper without starting another Agent bridge", async function () {
+    const workspace = createDefaultWorkspace();
+    const repository = {
+      loadRecord: async (item: Zotero.Item) => createEmptyRecord(1, item.key),
+      saveRecord: async () => undefined,
+    } as unknown as ResearchRepository;
+    let bridgeCreations = 0;
+    let cancellations = 0;
+    const events: ExtractionProgress[] = [];
+    const service = new ExternalAgentExtractionService(
+      repository,
+      () => {
+        bridgeCreations += 1;
+        return {
+          kind: "codex-cli",
+          cancel() {
+            cancellations += 1;
+          },
+          probe: async () => ({ executable: "codex", version: "test" }),
+          testStructuredOutput: async () => undefined,
+          extractFields: async () => {
+            service.cancel();
+            return { value: {}, executorVersion: "test" };
+          },
+          synthesizeComparison: async () => ({
+            value: "",
+            executorVersion: "",
+          }),
+        } satisfies AgentBridge;
+      },
+      async () => ({
+        type: "pdf-fulltext",
+        text: "paper",
+        hash: "hash",
+        attachmentID: 2,
+      }),
+    );
+
+    await service.run(
+      [{ key: "ITEM0009" } as Zotero.Item, { key: "ITEM0010" } as Zotero.Item],
+      workspace,
+      (event) => events.push(event),
+    );
+
+    expect(bridgeCreations).to.equal(1);
+    expect(cancellations).to.equal(1);
+    expect(
+      events.filter((event) => event.state === "cancelled"),
+    ).to.have.length(2);
   });
 
   it("restricts a title translation run to the requested field", async function () {
@@ -321,6 +428,84 @@ describe("external Agent extraction", function () {
     expect(
       events.some((event) => event.message.includes("回退到 Zotero 文本")),
     ).to.equal(false);
+  });
+
+  it("uses existing full text without copying or rereading the PDF", async function () {
+    const workspace = createDefaultWorkspace();
+    const record = createEmptyRecord(1, "ITEMTXT1");
+    const repository = {
+      loadRecord: async () => record,
+      saveRecord: async () => undefined,
+    } as unknown as ResearchRepository;
+    const previousPathUtils = (globalThis as any).PathUtils;
+    const previousIOUtils = (globalThis as any).IOUtils;
+    let ioCalls = 0;
+    (globalThis as any).PathUtils = {
+      tempDir: "C:\\Temp",
+      join: () => {
+        ioCalls += 1;
+        return "unused";
+      },
+    };
+    (globalThis as any).IOUtils = {
+      makeDirectory: async () => {
+        ioCalls += 1;
+      },
+      read: async () => {
+        ioCalls += 1;
+        return new Uint8Array([1]);
+      },
+      write: async () => {
+        ioCalls += 1;
+      },
+      remove: async () => {
+        ioCalls += 1;
+      },
+    };
+    let receivedInput: any;
+    const agent = {
+      kind: "codex-cli",
+      cancel() {},
+      probe: async () => ({ executable: "codex.exe", version: "test" }),
+      testStructuredOutput: async () => undefined,
+      extractFields: async (_fields: unknown, input: unknown) => {
+        receivedInput = input;
+        return { value: {}, executorVersion: "test" };
+      },
+      synthesizeComparison: async () => ({ value: "", executorVersion: "" }),
+    } satisfies AgentBridge;
+    const events: ExtractionProgress[] = [];
+    const service = new ExternalAgentExtractionService(
+      repository,
+      agent,
+      async () => ({
+        type: "mineru-markdown",
+        text: "已有的 MinerU 全文",
+        hash: "hash",
+        attachmentID: 2,
+        pdfPath: "C:\\papers\\primary.pdf",
+      }),
+    );
+
+    try {
+      await service.run(
+        [{ key: "ITEMTXT1" } as Zotero.Item],
+        workspace,
+        (event) => events.push(event),
+      );
+    } finally {
+      (globalThis as any).PathUtils = previousPathUtils;
+      (globalThis as any).IOUtils = previousIOUtils;
+    }
+
+    expect(ioCalls).to.equal(0);
+    expect(receivedInput).to.deep.equal({
+      text: "已有的 MinerU 全文",
+      sourceType: "mineru-markdown",
+    });
+    expect(events[1].message).to.include("MinerU Markdown");
+    expect(events[1].message).not.to.include("主 PDF");
+    expect(events.at(-1)?.state).to.equal("success");
   });
 
   it("regenerates only the requested cell and overwrites its manual value", async function () {

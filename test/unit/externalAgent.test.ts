@@ -15,8 +15,10 @@ import {
   listOllamaModels,
   openAICompatibleEndpoint,
   requestOpenAICompatibleJSON,
+  requestOpenAIResponsesJSON,
   resolveCompatibleWebSocketConstructor,
   validateExtractedValues,
+  waitForProcess,
 } from "../../src/services/externalAgent";
 
 describe("external Codex bridge", function () {
@@ -119,6 +121,33 @@ describe("external Codex bridge", function () {
     expect(extractCodexFailureDetail("", "")).to.equal("");
   });
 
+  it("reports the real timeout instead of the killed process exit code", async function () {
+    let finish!: (result: { exitCode: number }) => void;
+    const waiting = new Promise<{ exitCode: number }>((resolve) => {
+      finish = resolve;
+    });
+    let killCalls = 0;
+    const process = {
+      wait: () => waiting,
+      kill: async () => {
+        killCalls += 1;
+        finish({ exitCode: -9 });
+        return { exitCode: -9 };
+      },
+    };
+
+    let failure: unknown;
+    try {
+      await waitForProcess(process as any, 5, "Codex 任务超时");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).to.be.instanceOf(Error);
+    expect((failure as Error).message).to.equal("Codex 任务超时");
+    expect(killCalls).to.equal(1);
+  });
+
   it("lists and sorts models advertised by local Ollama", async function () {
     const models = await listOllamaModels("http://localhost:11434/", 1_000, {
       fetch: async () =>
@@ -190,6 +219,7 @@ describe("external Codex bridge", function () {
         endpoint: "https://example.com/v1/",
         apiKey: "secret-key",
         model: "provider/model",
+        reasoningEffort: "medium",
         timeoutMs: 1_000,
       },
       {
@@ -217,8 +247,179 @@ describe("external Codex bridge", function () {
     expect(requestURL).to.equal("https://example.com/v1/chat/completions");
     expect(body.model).to.equal("provider/model");
     expect(body.response_format).to.deep.equal({ type: "json_object" });
+    expect(body.reasoning_effort).to.equal("medium");
     expect(body.messages[1].content).to.include('"required":["ok"]');
     expect(value).to.deep.equal({ ok: true });
+  });
+
+  it("requests and parses strict structured JSON through Responses", async function () {
+    let requestURL = "";
+    let body: any;
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+    };
+    const value = await requestOpenAIResponsesJSON(
+      {
+        endpoint: "https://example.com/v1/responses/",
+        apiKey: "secret-key",
+        model: "provider/model",
+        reasoningEffort: "high",
+        timeoutMs: 1_000,
+      },
+      { prompt: "return a test result", schema },
+      {
+        fetch: async (input, init) => {
+          requestURL = String(input);
+          body = JSON.parse(String(init?.body));
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              status: "completed",
+              output: [
+                {
+                  type: "message",
+                  content: [{ type: "output_text", text: '{"ok":true}' }],
+                },
+              ],
+            }),
+          } as Response;
+        },
+      },
+    );
+    expect(requestURL).to.equal("https://example.com/v1/responses");
+    expect(body.model).to.equal("provider/model");
+    expect(body.reasoning).to.deep.equal({ effort: "high" });
+    expect(body.text.format).to.deep.equal({
+      type: "json_schema",
+      name: "zrdb_result",
+      strict: true,
+      schema,
+    });
+    expect(body.store).to.equal(false);
+    expect(body.input[1].content[0].text).to.equal("return a test result");
+    expect(value).to.deep.equal({ ok: true });
+  });
+
+  it("routes the OpenAI-compatible bridge to Responses when selected", async function () {
+    let requestURL = "";
+    const bridge = new ConfiguredAgentBridge(
+      {
+        kind: "openai-compatible",
+        endpoint: "https://example.com/v1",
+        model: "provider/model",
+        apiProtocol: "responses",
+        timeoutMs: 1_000,
+      },
+      {
+        fetch: async (input) => {
+          requestURL = String(input);
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              status: "completed",
+              output_text: '{"ok":true}',
+            }),
+          } as Response;
+        },
+      },
+    );
+    await bridge.testStructuredOutput();
+    expect(requestURL).to.equal("https://example.com/v1/responses");
+  });
+
+  it("preserves the selected protocol and reasoning effort after a gateway timeout", async function () {
+    let requests = 0;
+    let failure: unknown;
+    try {
+      await requestOpenAIResponsesJSON(
+        {
+          endpoint: "https://api.example.com/v1",
+          model: "provider/model",
+          timeoutMs: 1_000,
+          reasoningEffort: "high",
+        },
+        { prompt: "extract", schema: { type: "object" } },
+        {
+          fetch: async (_url, init) => {
+            requests += 1;
+            expect(JSON.parse(String(init?.body)).reasoning.effort).to.equal(
+              "high",
+            );
+            expect(JSON.parse(String(init?.body)).stream).to.equal(true);
+            return {
+              ok: false,
+              status: 524,
+              text: async () => "gateway timeout",
+            } as Response;
+          },
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).to.include("HTTP 524");
+    expect(requests).to.equal(1);
+  });
+
+  it("reports Responses failures even when HTTP status is 200", async function () {
+    const scenarios = [
+      {
+        data: { status: "failed", error: { message: "bad secret-key" } },
+        expected: "生成失败",
+      },
+      {
+        data: {
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+        expected: "max_output_tokens",
+      },
+      {
+        data: {
+          status: "completed",
+          output: [
+            { content: [{ type: "refusal", refusal: "no secret-key" }] },
+          ],
+        },
+        expected: "拒绝生成",
+      },
+      {
+        data: { status: "completed", output_text: "not-json" },
+        expected: "有效 JSON",
+      },
+      { data: { status: "completed", output: [] }, expected: "没有返回" },
+    ];
+    for (const scenario of scenarios) {
+      let failure: unknown;
+      try {
+        await requestOpenAIResponsesJSON(
+          {
+            endpoint: "https://example.com/v1",
+            apiKey: "secret-key",
+            model: "provider/model",
+            timeoutMs: 1_000,
+          },
+          { prompt: "test", schema: { type: "object" } },
+          {
+            fetch: async () =>
+              ({
+                ok: true,
+                status: 200,
+                json: async () => scenario.data,
+              }) as Response,
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(String(failure)).to.include(scenario.expected);
+      expect(String(failure)).not.to.include("secret-key");
+    }
   });
 
   it("uses the OpenAI-compatible bridge for checks and field extraction", async function () {
@@ -261,6 +462,15 @@ describe("external Codex bridge", function () {
   });
 
   it("validates API Base URLs and redacts keys from gateway errors", async function () {
+    expect(
+      openAICompatibleEndpoint(
+        "https://example.com/v1/chat/completions",
+        "/responses",
+      ),
+    ).to.equal("https://example.com/v1/responses");
+    expect(
+      openAICompatibleEndpoint("https://example.com/v1/models", "/models"),
+    ).to.equal("https://example.com/v1/models");
     expect(() =>
       openAICompatibleEndpoint("https://example.com/v1?key=secret", "/models"),
     ).to.throw("不含查询参数");
@@ -288,6 +498,40 @@ describe("external Codex bridge", function () {
     expect(String(failure)).to.include("HTTP 401");
     expect(String(failure)).to.not.include("secret-key");
     expect(String(failure)).to.include("[已隐藏]");
+  });
+
+  it("summarizes HTML gateway timeouts instead of leaking the full page", async function () {
+    let failure: unknown;
+    try {
+      await requestOpenAIResponsesJSON(
+        {
+          endpoint: "https://api.example.com/v1",
+          apiKey: "secret-key",
+          model: "provider/model",
+          timeoutMs: 1_000,
+          reasoningEffort: "high",
+        },
+        { prompt: "extract", schema: { type: "object" } },
+        {
+          fetch: async () =>
+            ({
+              ok: false,
+              status: 524,
+              text: async () =>
+                "<!doctype html><html><head><title>Error 524: A timeout occurred</title></head><body><h1>Web server is down</h1><p>The origin web server timed out.</p><script>secret-key</script></body></html>",
+            }) as Response,
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+    const message = String(failure);
+    expect(message).to.include("HTTP 524");
+    expect(message).to.include("上游模型响应超时");
+    expect(message).to.include("Error 524: A timeout occurred");
+    expect(message).to.not.include("<html>");
+    expect(message).to.not.include("<script>");
+    expect(message).to.not.include("secret-key");
   });
 
   it("builds a closed JSON Schema for the requested fields", function () {

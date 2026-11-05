@@ -436,23 +436,43 @@ export function ResearchDatabaseApp(props: Props) {
         return;
       }
       setExtracting(true);
+      const failedFieldIDs =
+        scope === "failed"
+          ? new Map(
+              targets.map((item) => [
+                item.key,
+                progress.get(item.key)?.fieldIDs || [],
+              ]),
+            )
+          : undefined;
       setProgress(new Map());
       const failures = new Map<string, string>();
       let profile: AgentProfile | undefined;
       try {
         profile = readAgentProfile();
-        const currentAgent = createAgentBridge(profile);
+        const agentProfile = profile;
         const service = new ExternalAgentExtractionService(
           props.repository,
-          currentAgent,
+          () => createAgentBridge(agentProfile),
         );
         extractionRef.current = service;
-        await service.run(targets, workspace, (entry) => {
-          if (entry.state === "failed")
-            failures.set(entry.itemKey, entry.message);
-          else failures.delete(entry.itemKey);
-          setProgress((current) => new Map(current).set(entry.itemKey, entry));
-        });
+        await service.run(
+          targets,
+          workspace,
+          (entry) => {
+            if (entry.record)
+              setRecords((current) =>
+                new Map(current).set(entry.itemKey, entry.record!),
+              );
+            if (entry.state === "failed")
+              failures.set(entry.itemKey, entry.message);
+            else failures.delete(entry.itemKey);
+            setProgress((current) =>
+              new Map(current).set(entry.itemKey, entry),
+            );
+          },
+          { requestedFieldIDsByItem: failedFieldIDs },
+        );
         await reloadRecords(workspace, false, false, {
           records: targets.map((item) => item.key),
         });
@@ -510,10 +530,10 @@ export function ResearchDatabaseApp(props: Props) {
       );
       try {
         profile = readAgentProfile();
-        const currentAgent = createAgentBridge(profile);
+        const agentProfile = profile;
         const service = new ExternalAgentExtractionService(
           props.repository,
-          currentAgent,
+          () => createAgentBridge(agentProfile),
         );
         extractionRef.current = service;
         let failure: ExtractionProgress | undefined;
@@ -521,6 +541,10 @@ export function ResearchDatabaseApp(props: Props) {
           [item],
           workspace,
           (entry) => {
+            if (entry.record)
+              setRecords((current) =>
+                new Map(current).set(entry.itemKey, entry.record!),
+              );
             if (entry.state === "failed") failure = entry;
             else failure = undefined;
             setProgress((current) =>

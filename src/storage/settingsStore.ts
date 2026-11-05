@@ -38,6 +38,7 @@ export const PORTABLE_SETTING_KEYS = [
   "agentEndpoint",
   "agentModel",
   "agentReasoningEffort",
+  "agentProtocol",
   "agentTimeoutMs",
   "mineruMode",
   "mineruSharedStoreDirectory",

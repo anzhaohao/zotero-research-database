@@ -6,6 +6,7 @@ import {
 } from "./mineruArchive";
 import { resolvePrimaryPdf } from "./primaryPdf";
 import { clearPref, getPref, setPref } from "../utils/prefs";
+import { getDataRoot } from "../storage/dataRoot";
 import {
   claimSharedMinerUWork,
   writeSharedMinerUIndex,
@@ -18,11 +19,6 @@ const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 const MINERU_SETTINGS_VERSION = 6;
 const DEFAULT_MINERU_OFFICIAL_ENDPOINT = "https://mineru.net/api/v4";
 const DEFAULT_MINERU_TOKEN_ENVIRONMENT = "MINERU_API_TOKEN";
-const MINERU_DOCKER_PROJECT_PATH = "E:\\software\\DockerProject\\MinerU";
-const MINERU_SHARED_STORE_PATH = "E:\\software\\Zotero\\mineru-shared-store";
-const DOCKER_EXECUTABLE_PATH =
-  "E:\\software\\docker\\resources\\bin\\docker.exe";
-const DOCKER_DESKTOP_PATH = "E:\\software\\docker\\Docker Desktop.exe";
 const DOCKER_START_TIMEOUT_MS = 4 * 60 * 1000;
 const LLM_FOR_ZOTERO_MINERU_CACHE_DIR = "llm-for-zotero-mineru";
 
@@ -127,6 +123,17 @@ export interface MinerUSettingsInput {
   timeoutMs: unknown;
 }
 
+function defaultSharedStoreDirectory(): string {
+  try {
+    const root = getDataRoot();
+    if (root && typeof PathUtils !== "undefined")
+      return PathUtils.join(root, "mineru-shared-store");
+  } catch {
+    // Unit tests and first-run setup may not have a Zotero path yet.
+  }
+  return "";
+}
+
 export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
   const mode = ["official-api", "self-hosted"].includes(String(input.mode))
     ? (String(input.mode) as MinerUMode)
@@ -155,8 +162,8 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
   return {
     mode,
     sharedStoreDirectory:
-      String(input.sharedStoreDirectory || MINERU_SHARED_STORE_PATH).trim() ||
-      MINERU_SHARED_STORE_PATH,
+      String(input.sharedStoreDirectory || "").trim() ||
+      defaultSharedStoreDirectory(),
     officialEndpoint,
     officialToken: String(input.officialToken || "").trim(),
     officialTokenEnvironment:
@@ -168,16 +175,11 @@ export function parseMinerUProfile(input: MinerUSettingsInput): MinerUProfile {
       input.selfHostedAutoStart === undefined
         ? true
         : Boolean(input.selfHostedAutoStart),
-    selfHostedProjectDirectory:
-      String(
-        input.selfHostedProjectDirectory || MINERU_DOCKER_PROJECT_PATH,
-      ).trim() || MINERU_DOCKER_PROJECT_PATH,
-    dockerExecutable:
-      String(input.dockerExecutable || DOCKER_EXECUTABLE_PATH).trim() ||
-      DOCKER_EXECUTABLE_PATH,
-    dockerDesktopExecutable:
-      String(input.dockerDesktopExecutable || DOCKER_DESKTOP_PATH).trim() ||
-      DOCKER_DESKTOP_PATH,
+    selfHostedProjectDirectory: String(
+      input.selfHostedProjectDirectory || "",
+    ).trim(),
+    dockerExecutable: String(input.dockerExecutable || "").trim(),
+    dockerDesktopExecutable: String(input.dockerDesktopExecutable || "").trim(),
     backend: String(input.backend || "pipeline").trim() || "pipeline",
     tier: mineruTier(input.tier),
     method,
@@ -257,18 +259,8 @@ export function migrateMinerUPreferences(): void {
     if (endpoint && endpoint !== normalized)
       setPref("mineruOfficialEndpoint", normalized);
   }
-  if (version < 2) {
-    if (!String(getPref("mineruSelfHostedProjectDirectory") || "").trim())
-      setPref("mineruSelfHostedProjectDirectory", MINERU_DOCKER_PROJECT_PATH);
-    if (!String(getPref("mineruDockerExecutable") || "").trim())
-      setPref("mineruDockerExecutable", DOCKER_EXECUTABLE_PATH);
-    if (!String(getPref("mineruDockerDesktopExecutable") || "").trim())
-      setPref("mineruDockerDesktopExecutable", DOCKER_DESKTOP_PATH);
-  }
   if (!String(getPref("mineruTier") || "").trim())
     setPref("mineruTier", "standard");
-  if (!String(getPref("mineruSharedStoreDirectory") || "").trim())
-    setPref("mineruSharedStoreDirectory", MINERU_SHARED_STORE_PATH);
   if (version < 5) {
     const legacyEnvironment = String(
       getPref("mineruOfficialTokenEnvironment") || "",
@@ -601,7 +593,22 @@ export class MinerUConversionService {
 
   private async resolveDockerExecutable(): Promise<string> {
     const configured = this.profile.dockerExecutable.trim();
-    if (!/(?:^|[\\/])docker(?:\.exe)?$/i.test(configured))
+    const commandName =
+      Services.appinfo.OS === "WINNT" ? "docker.exe" : "docker";
+    if (!configured) {
+      try {
+        return await getSubprocess().pathSearch(commandName);
+      } catch (error) {
+        throw new Error(
+          "没有找到 Docker CLI；请安装 Docker，或在设置中填写 docker.exe 路径",
+          { cause: error },
+        );
+      }
+    }
+    if (
+      !/^(?:docker(?:\.exe)?)$/i.test(configured) &&
+      !/(?:^|[\\/])docker(?:\.exe)?$/i.test(configured)
+    )
       throw new Error("Docker CLI 必须指向 docker 或 docker.exe");
     if (configured.includes("\\") || configured.includes("/")) {
       if (!(await IOUtils.exists(configured)))
@@ -611,9 +618,10 @@ export class MinerUConversionService {
     try {
       return await getSubprocess().pathSearch(configured);
     } catch (error) {
-      throw new Error("没有找到 Docker CLI；请在设置中填写 docker.exe 路径", {
-        cause: error,
-      });
+      throw new Error(
+        "没有找到 Docker CLI；请安装 Docker，或在设置中填写 docker.exe 路径",
+        { cause: error },
+      );
     }
   }
 
@@ -632,8 +640,12 @@ export class MinerUConversionService {
   }
 
   private async startDockerDesktop(): Promise<void> {
-    const executable = this.profile.dockerDesktopExecutable.trim();
-    if (!/(?:^|[\\/])Docker Desktop\.exe$/i.test(executable))
+    const configured = this.profile.dockerDesktopExecutable.trim();
+    const executable = configured || (await findDockerDesktopExecutable());
+    if (
+      Services.appinfo.OS === "WINNT" &&
+      !/(?:^|[\\/])Docker Desktop\.exe$/i.test(executable)
+    )
       throw new Error("Docker Desktop 路径必须指向 Docker Desktop.exe");
     if (!(await IOUtils.exists(executable)))
       throw new Error(`Docker Desktop 不存在：${executable}`);
@@ -2108,6 +2120,49 @@ function modeLabel(mode: MinerUMode): string {
 function getSubprocess(): SubprocessAPI {
   return (ChromeUtils.importESModule(SUBPROCESS_MODULE) as any)
     .Subprocess as SubprocessAPI;
+}
+
+export function dockerDesktopExecutableCandidates(
+  platform: string,
+  environment: Record<string, string | undefined>,
+  joinPath: (...parts: string[]) => string = (...parts) =>
+    PathUtils.join(...parts),
+): string[] {
+  if (platform === "WINNT") {
+    const candidates: string[] = [];
+    for (const root of [
+      environment.ProgramFiles,
+      environment["ProgramFiles(x86)"],
+      environment.LOCALAPPDATA
+        ? joinPath(environment.LOCALAPPDATA, "Programs")
+        : undefined,
+    ]) {
+      if (root)
+        candidates.push(
+          joinPath(root, "Docker", "Docker", "Docker Desktop.exe"),
+        );
+    }
+    return candidates;
+  }
+  if (platform === "Darwin")
+    return ["/Applications/Docker.app/Contents/MacOS/Docker"];
+  return ["/usr/bin/docker-desktop", "/usr/local/bin/docker-desktop"];
+}
+
+async function findDockerDesktopExecutable(): Promise<string> {
+  const platform = Services.appinfo.OS;
+  const environment = {
+    ProgramFiles: Services.env.get("ProgramFiles"),
+    "ProgramFiles(x86)": Services.env.get("ProgramFiles(x86)"),
+    LOCALAPPDATA: Services.env.get("LOCALAPPDATA"),
+  };
+  const candidates = dockerDesktopExecutableCandidates(platform, environment);
+  for (const candidate of candidates) {
+    if (await IOUtils.exists(candidate)) return candidate;
+  }
+  throw new Error(
+    "未找到 Docker Desktop；请安装 Docker Desktop，或在设置中填写其可执行文件路径",
+  );
 }
 
 function delay(milliseconds: number): Promise<void> {

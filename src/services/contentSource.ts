@@ -64,18 +64,43 @@ export async function resolveSourceText(
 
   if (!pdf) throw new Error("条目下没有 MinerU Markdown 或主 PDF 附件");
   const fulltext = Zotero.Fulltext;
-  try {
-    await fulltext.indexItems([pdf.id], { complete: true, ignoreErrors: true });
-  } catch (error) {
-    Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+  const readCachedText = async (): Promise<string> => {
+    try {
+      const cachePath = fulltext.getItemCacheFile(pdf).path;
+      return toText(await Zotero.File.getContentsAsync(cachePath, "utf-8"));
+    } catch {
+      return "";
+    }
+  };
+  const isComplete = async (): Promise<boolean> => {
+    try {
+      return await fulltext.isFullyIndexed(pdf);
+    } catch (error) {
+      Zotero.logError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      return false;
+    }
+  };
+  let text = await readCachedText();
+  let complete = await isComplete();
+  if (!text.trim() || !complete) {
+    try {
+      await fulltext.indexItems([pdf.id], {
+        complete: true,
+        ignoreErrors: true,
+      });
+    } catch (error) {
+      Zotero.logError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
+    text = await readCachedText();
+    complete = await isComplete();
   }
-  let text = "";
-  try {
-    const cachePath = fulltext.getItemCacheFile(pdf).path;
-    text = toText(await Zotero.File.getContentsAsync(cachePath, "utf-8"));
-  } catch (error) {
-    Zotero.logError(error instanceof Error ? error : new Error(String(error)));
-  }
+  // A nonempty cache may contain only the first few pages. Never present it
+  // as the full paper; CLI bridges can still read a safely staged original PDF.
+  if (!complete) text = "";
   if (!text.trim()) {
     if (pdfPath) {
       return {

@@ -1,4 +1,7 @@
-import type { AgentProfile } from "../services/externalAgent";
+import {
+  openAICompatibleEndpoint,
+  type AgentProfile,
+} from "../services/externalAgent";
 
 const AGENT_LABELS: Record<AgentProfile["kind"], string> = {
   "codex-cli": "Codex CLI",
@@ -52,11 +55,32 @@ export function formatAgentError(
   error: unknown,
   profile?: AgentProfile,
 ): string {
+  const apiProtocol =
+    profile?.kind === "openai-compatible"
+      ? profile.apiProtocol === "responses"
+        ? "Responses API"
+        : "Chat Completions"
+      : "";
+  let apiEndpoint = "";
+  if (profile?.kind === "openai-compatible") {
+    try {
+      apiEndpoint = openAICompatibleEndpoint(
+        profile.endpoint,
+        profile.apiProtocol === "responses"
+          ? "/responses"
+          : "/chat/completions",
+      );
+    } catch {
+      // The request error already explains an invalid endpoint.
+    }
+  }
   const context = profile
     ? [
         "助手：" + (AGENT_LABELS[profile.kind] || profile.kind),
         "模型：" + (profile.model || "自动选择"),
         "思考强度：" + (profile.reasoningEffort || "默认"),
+        ...(apiProtocol ? ["接口协议：" + apiProtocol] : []),
+        ...(apiEndpoint ? ["请求地址：" + apiEndpoint] : []),
         "",
       ]
     : [];
@@ -70,9 +94,18 @@ export function formatAgentError(
         "\n……诊断过长，中间部分已省略……\n" +
         diagnostic.slice(-2400)
       : diagnostic;
-  return [title, "", ...context, "错误详情：" + (bounded || "未知错误")].join(
-    "\n",
-  );
+  const hint = /(?:HTTP|status)\s*503\b|Service Unavailable/i.test(diagnostic)
+    ? "建议：供应商或上游服务当前不可用，请检查服务状态，或切换已通过连接测试的供应商后重试。"
+    : diagnostic.includes("HTTP 524") || diagnostic.includes("HTTP 504")
+      ? "建议：请检查第三方网关的上游状态；可在供应商设置中测试 Chat Completions 或降低思考强度。插件不会自动更换协议或降低强度。"
+      : "";
+  return [
+    title,
+    "",
+    ...context,
+    "错误详情：" + (bounded || "未知错误"),
+    ...(hint ? [hint] : []),
+  ].join("\n");
 }
 
 export function showAgentError(

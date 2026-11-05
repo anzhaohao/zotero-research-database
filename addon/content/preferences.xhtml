@@ -244,6 +244,21 @@
         >
       </html:div>
       <html:label
+        >当前供应商
+        <html:select
+          id="zrdb-agent-provider-select"
+          aria-label="当前供应商"
+        ></html:select>
+      </html:label>
+      <html:div class="zrdb-pref-inline-actions">
+        <html:button type="button" id="zrdb-agent-provider-save"
+          >新建供应商</html:button
+        >
+        <html:button type="button" id="zrdb-agent-provider-delete"
+          >删除当前供应商</html:button
+        >
+      </html:div>
+      <html:label
         >助手类型
         <html:select data-pref="agentKind"
           ><html:option value="codex-cli">Codex CLI（推荐）</html:option
@@ -272,6 +287,13 @@
           autocomplete="off"
           spellcheck="false"
       /></html:label>
+      <html:label data-agent-kinds="openai-compatible"
+        >接口协议
+        <html:select data-pref="agentProtocol">
+          <html:option value="responses">Responses API（推荐）</html:option>
+          <html:option value="chat-completions">Chat Completions</html:option>
+        </html:select>
+      </html:label>
       <html:label
         class="zrdb-agent-model-control"
         data-agent-kinds="codex-cli claude-code ollama openai-compatible"
@@ -291,7 +313,7 @@
           placeholder="输入模型 ID"
           hidden="true"
       /></html:label>
-      <html:label data-agent-kinds="codex-cli claude-code"
+      <html:label data-agent-kinds="codex-cli claude-code openai-compatible"
         >思考强度
         <html:select data-pref="agentReasoningEffort">
           <html:option value="">默认</html:option>
@@ -361,12 +383,12 @@
         <html:p
           >只有在自动检测失败、需要指定程序位置，或接入自定义程序时才需要修改这些选项。</html:p
         >
-        <html:label data-agent-kinds="claude-code custom-json-process"
-          >程序位置
+        <html:label data-agent-kinds="codex-cli claude-code custom-json-process"
+          >程序位置（可选）
           <html:input
             type="text"
             data-pref="agentExecutable"
-            placeholder="自动检测或填写绝对路径"
+            placeholder="留空自动检测，或填写程序绝对路径"
         /></html:label>
         <html:label data-agent-kinds="custom-json-process"
           >启动参数（JSON 数组）
@@ -474,21 +496,21 @@
         <html:input
           type="text"
           data-pref="mineruSelfHostedProjectDirectory"
-          placeholder="E:\software\DockerProject\MinerU"
+          placeholder="留空后需要手动选择包含 compose.yaml 的目录"
       /></html:label>
       <html:label data-mineru-modes="self-hosted"
         >Docker CLI
         <html:input
           type="text"
           data-pref="mineruDockerExecutable"
-          placeholder="E:\software\docker\resources\bin\docker.exe"
+          placeholder="留空自动检测 docker；也可填写绝对路径"
       /></html:label>
       <html:label data-mineru-modes="self-hosted"
         >Docker Desktop
         <html:input
           type="text"
           data-pref="mineruDockerDesktopExecutable"
-          placeholder="E:\software\docker\Docker Desktop.exe"
+          placeholder="留空自动检测；也可填写 Docker Desktop.exe 路径"
       /></html:label>
       <html:label data-mineru-modes="self-hosted"
         >解析质量档
@@ -537,7 +559,7 @@
         <html:input
           type="text"
           data-pref="mineruSharedStoreDirectory"
-          placeholder="E:\software\Zotero\mineru-shared-store"
+          placeholder="留空时跟随研究数据库目录，也可填写共享目录"
       /></html:label>
       <html:p class="zrdb-pref-mode-note"
         >Research Database 与 Bilingual Reader 按 PDF SHA-256
@@ -596,17 +618,15 @@
         >
       </html:div>
       <html:p class="zrdb-pref-warning"
-        >选择目录后需点击“保存本机设置”，重启 Zotero
-        才会打开目标库。空目录会新建空库，
-        不会自动搬迁当前库；“打开目录”显示当前生效的目录。迁移当前库前请先关闭
-        Zotero 并复制数据文件，保留原目录。</html:p
+        >更换目录后点击“保存本机设置”，重启 Zotero
+        时会复制最新配置、数据、映射及产物，逐文件校验成功后才切换。
+        如果目标文件存在不同内容，迁移会停止并继续使用原目录。原文件始终保留；“打开目录”显示当前生效目录。</html:p
       >
       <html:h4>研究产物存储</html:h4>
       <html:p
-        >新产物优先存放在研究数据库目录的 artifacts
-        子目录；已有产物可使用下方工具迁入。
-        未设置研究数据库目录时继续使用旧产物路径。主 PDF 始终由 Zotero
-        管理。</html:p
+        >填写产物目录后，新产物保存到该目录；留空时跟随研究数据库目录的
+        artifacts 子目录。 更换目录后保存并重启，会复制已有产物并更新关联。主
+        PDF 始终由 Zotero 管理。</html:p
       >
       <html:label
         >研究产物根目录

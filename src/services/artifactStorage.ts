@@ -90,13 +90,10 @@ export function getArtifactStorageRoot(): string {
   const legacyConfiguredRoot = String(
     getPref(ARTIFACT_STORAGE_ROOT_PREF) || "",
   ).trim();
+  if (legacyConfiguredRoot) return legacyConfiguredRoot;
   if (dataRoot && hasConfiguredDataRoot()) {
     const libraryID = Number(Zotero?.Libraries?.userLibraryID || 0);
-    if (
-      libraryID > 0 &&
-      (!legacyConfiguredRoot ||
-        normalizePath(dataRoot) !== normalizePath(legacyConfiguredRoot))
-    )
+    if (libraryID > 0)
       return PathUtils.join(dataRoot, "artifacts", String(libraryID));
   }
   return legacyConfiguredRoot;

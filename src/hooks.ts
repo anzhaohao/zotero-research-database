@@ -1,4 +1,6 @@
 import { config } from "../package.json";
+import { completeDirectoryMigration } from "./storage/directoryMigration";
+import { completeDataRecovery } from "./storage/dataRecovery";
 import { createZToolkit } from "./utils/ztoolkit";
 import { MainViewController } from "./ui/viewController";
 import { unregisterArtifactEndpoint } from "./services/artifactEndpoint";
@@ -51,6 +53,14 @@ async function onStartup() {
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
+  let directoryMigrationError: unknown;
+  try {
+    await completeDataRecovery();
+    await completeDirectoryMigration();
+  } catch (error) {
+    directoryMigrationError = error;
+    Zotero.logError(error instanceof Error ? error : new Error(String(error)));
+  }
   try {
     await initializeDataRoot();
     await initializePortableSettings();
@@ -88,6 +98,11 @@ async function onStartup() {
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
   );
+  if (directoryMigrationError)
+    Zotero.getMainWindow()?.alert(
+      "研究数据库目录迁移未完成，继续使用原目录；原文件保留。请检查目标目录后重启重试。\n\n" +
+        String(directoryMigrationError),
+    );
   addon.data.initialized = true;
 }
 
