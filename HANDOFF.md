@@ -791,3 +791,21 @@ gitGraph
 - 结果：Zotero storage 只作为超长路径的宿主兼容回退，不改变备份/迁移的共享目录数据模型；图片预览继续通过长路径 IO 读取共享源文件。
 - 测试：新增隔离宿主断言，要求超长共享根导入后使用 stored attachment 并可重新打开、读取和生成图片 Data URI；短路径的 linked-file 迁移测试继续保留。单元测试 333 项通过，npx tsc --noEmit 通过；npm test -- --no-watch --abort-on-fail --exit-on-finish 已触发构建但当前环境找不到 Zotero 可执行文件，因此该宿主断言尚未在本轮执行。
 - 交付：版本保持 0.3.45。正式构建后 XPI 统一输出 release/zotero-research-database.xpi，旧包归档到 release/archive/。
+
+## 2026-11-06 GitHub README 面向使用者重写
+
+- 用户要求：重新介绍插件，保留已有图片、视频等附件，允许按需上传截图。本次沿用现有真实截图与演示视频，无需新增上传。
+- 开工时本地分支 codex/shared-mineru-store 位于 6034726，远端 main 已到 d4fbd6c；先快进至该提交，保留用户新加的截图，再改写文档。README.md 与 HANDOFF.md 的改前副本位于 E:/software/AI改前备份/20261106_094120_ZRDB_README改写前备份_codex/。
+- README 以“从收藏论文，到看清研究脉络”介绍使用价值，先展示截图与视频，再说明阅读字段、AI 填充与人工核对、图表、比较导出、五步安装上手、API/CLI 选择、MinerU 复用及本机数据备份。CLI 与 Docker 进阶说明折叠展示。
+- 对照当前代码纠正旧的 20,000 字符截断说明，说明 200,000 字符上限与不自动截断；精简字段设置说明，明确六个阅读字段只是可自定义的示例；去除已过时的测试数量、构建哈希与开发机 Docker 镜像版本。
+- 原附件完整保留：图片资产 62894049-daed-4e38-b103-dfa339086ab0；视频资产 6557ee54-17b8-49a1-94cf-07163140a8eb。保留原始 GitHub 附件 URL，视频保持独立行以嵌入播放；仅补充图片替代文字。
+- 文档验证：GitHub Markdown API 渲染得到三个表格、两个折叠区和图片/视频元素；原附件 GET Range 检查分别返回 206 image/png 与 206 video/mp4，最新 XPI 下载入口返回 200 application/x-xpinstall。格式与差异检查在提交前执行。
+- 仅更新 README.md 与本交接记录，不修改代码、个人字段配置、版本号或 XPI。本轮验证范围为文档、媒体和下载链接；不以历史测试记录或跳过的外部测试宣称当前 CI 全绿。
+- Git 来源与发布目标如下，文档提交基于已合并功能及用户图片提交，推送 origin/main 时不改写历史：
+
+```mermaid
+gitGraph
+    commit id: "6034726 功能修复"
+    commit id: "d4fbd6c 用户截图"
+    commit id: "本次 README 重写"
+```
